@@ -53,6 +53,7 @@ async def publish_scheduled_post(
     meta_client: MetaGraphClient,
     cipher: TokenCipher,
     settings: Settings | None = None,
+    write_copilot_notification: bool = True,
 ) -> ScheduledPost:
     """Publish a single post to Instagram using Meta's 2-step container flow."""
     cfg = settings or get_settings()
@@ -105,26 +106,27 @@ async def publish_scheduled_post(
         except (ZoneInfoNotFoundError, KeyError):
             tz = ZoneInfo("UTC")
         local_disp = post.published_at.astimezone(tz).strftime("%a, %b %d at %I:%M %p")
-        db.add(
-            CopilotMessage(
-                account_id=account.id,
-                role="assistant",
-                content=(
-                    f"Auto-published your {post.media_type} to @{account.username} at {local_disp}!"
-                    + (f"\nLink: {post.published_permalink}" if post.published_permalink else "")
-                ),
-                structured_payload_json={
-                    "scheduled_post": {
-                        "id": post.id,
-                        "status": "PUBLISHED",
-                        "scheduled_for": post.published_at.isoformat(),
-                        "local_display": local_disp,
-                        "published_permalink": post.published_permalink,
-                        "last_error": "",
-                    }
-                },
+        if write_copilot_notification:
+            db.add(
+                CopilotMessage(
+                    account_id=account.id,
+                    role="assistant",
+                    content=(
+                        f"Your scheduled {post.media_type} is now live on @{account.username} ({local_disp})!"
+                        + (f"\nLink: {post.published_permalink}" if post.published_permalink else "")
+                    ),
+                    structured_payload_json={
+                        "scheduled_post": {
+                            "id": post.id,
+                            "status": "PUBLISHED",
+                            "scheduled_for": post.published_at.isoformat(),
+                            "local_display": local_disp,
+                            "published_permalink": post.published_permalink,
+                            "last_error": "",
+                        }
+                    },
+                )
             )
-        )
         await db.commit()
         return post
     except Exception as exc:
@@ -136,23 +138,24 @@ async def publish_scheduled_post(
             post.scheduled_for = datetime.now(timezone.utc) + timedelta(minutes=backoff_minutes)
         else:
             post.status = "FAILED"
-            db.add(
-                CopilotMessage(
-                    account_id=account.id,
-                    role="assistant",
-                    content=f"Scheduled {post.media_type} failed to publish: {post.last_error}",
-                    structured_payload_json={
-                        "scheduled_post": {
-                            "id": post.id,
-                            "status": "FAILED",
-                            "scheduled_for": post.scheduled_for.isoformat(),
-                            "local_display": post.scheduled_for.isoformat(),
-                            "published_permalink": "",
-                            "last_error": post.last_error,
-                        }
-                    },
+            if write_copilot_notification:
+                db.add(
+                    CopilotMessage(
+                        account_id=account.id,
+                        role="assistant",
+                        content=f"Scheduled {post.media_type} failed to publish: {post.last_error}",
+                        structured_payload_json={
+                            "scheduled_post": {
+                                "id": post.id,
+                                "status": "FAILED",
+                                "scheduled_for": post.scheduled_for.isoformat(),
+                                "local_display": post.scheduled_for.isoformat(),
+                                "published_permalink": "",
+                                "last_error": post.last_error,
+                            }
+                        },
+                    )
                 )
-            )
         await db.commit()
         return post
 

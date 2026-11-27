@@ -109,12 +109,20 @@ export default function PlannerPage() {
   }, []);
 
   useEffect(() => {
+    if (!selectedId) return;
+    const onActivity = () => loadPosts(selectedId, true);
+    window.addEventListener("socialmediaai:activity-updated", onActivity);
     const hasPending = posts.some((p) => p.status === "QUEUED" || p.status === "PUBLISHING");
-    if (!selectedId || (!hasPending && !copilotOpen)) return;
+    if (!hasPending && !copilotOpen) {
+      return () => window.removeEventListener("socialmediaai:activity-updated", onActivity);
+    }
     const timer = setInterval(() => {
       loadPosts(selectedId, true);
     }, 8000);
-    return () => clearInterval(timer);
+    return () => {
+      window.removeEventListener("socialmediaai:activity-updated", onActivity);
+      clearInterval(timer);
+    };
   }, [selectedId, posts, copilotOpen, loadPosts]);
 
   useEffect(() => {

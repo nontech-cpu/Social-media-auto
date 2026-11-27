@@ -291,6 +291,20 @@ export interface ScheduledPost {
   last_error: string;
 }
 
+export interface PublishActivityEvent {
+  id: string;
+  account_id: string;
+  username: string;
+  media_type: "IMAGE" | "REELS" | "CAROUSEL" | "STORIES";
+  status: "PUBLISHED" | "FAILED";
+  caption_preview: string;
+  published_permalink: string;
+  last_error: string;
+  scheduled_for: string;
+  published_at: string | null;
+  updated_at: string;
+}
+
 export interface CopilotMessage {
   id: string;
   role: "user" | "assistant";

@@ -129,6 +129,46 @@ async def list_scheduled_posts(
     return {"posts": [_serialize_post(p) for p in rows]}
 
 
+@router.get("/posts/{account_id}/activity")
+async def list_publish_activity(
+    account_id: str, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Return recent PUBLISHED and FAILED post events for live UI & notification bell alerts."""
+    account = await db.get(InstagramAccount, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="Instagram account not found.")
+
+    rows = (
+        await db.execute(
+            select(ScheduledPost)
+            .where(
+                ScheduledPost.account_id == account_id,
+                ScheduledPost.status.in_(["PUBLISHED", "FAILED"]),
+            )
+            .order_by(ScheduledPost.updated_at.desc())
+            .limit(15)
+        )
+    ).scalars().all()
+    return {
+        "events": [
+            {
+                "id": p.id,
+                "account_id": p.account_id,
+                "username": account.username,
+                "media_type": p.media_type,
+                "status": p.status,
+                "caption_preview": (p.caption or "")[:90],
+                "published_permalink": p.published_permalink,
+                "last_error": p.last_error,
+                "scheduled_for": _as_utc_iso(p.scheduled_for),
+                "published_at": _as_utc_iso(p.published_at) if p.published_at else None,
+                "updated_at": _as_utc_iso(p.updated_at),
+            }
+            for p in rows
+        ]
+    }
+
+
 @router.post("/posts/{account_id}/schedule")
 async def schedule_posts(
     account_id: str,

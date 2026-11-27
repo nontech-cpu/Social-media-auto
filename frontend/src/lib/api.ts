@@ -4,6 +4,7 @@ import type {
   CopilotMessage,
   GeneratedPostPackage,
   InstagramAccount,
+  PublishActivityEvent,
   ScheduledPost,
 } from "./types";
 
@@ -183,6 +184,8 @@ export const api = {
   // Posts & Queue
   listPosts: (accountId: string) =>
     apiRequest<{ posts: ScheduledPost[] }>(`/api/posts/${accountId}`),
+  getPublishActivity: (accountId: string) =>
+    apiRequest<{ events: PublishActivityEvent[] }>(`/api/posts/${accountId}/activity`),
   schedulePosts: (
     accountId: string,
     posts: Array<{

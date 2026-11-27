@@ -44,5 +44,40 @@ async def test_health_and_brand_routes_smoke(db_session_factory) -> None:
             get_res = await client.get("/api/onboarding/brand")
             assert get_res.status_code == 200
             assert get_res.json()["brand"]["niche"] == "AI SaaS Tools"
+
+            from datetime import datetime, timezone
+            from app.models.entities import InstagramAccount, ScheduledPost
+
+            async with db_session_factory() as db:
+                acc = InstagramAccount(
+                    ig_user_id="ig_act_1",
+                    username="act_tester",
+                    timezone="UTC",
+                    encrypted_access_token=derived_cipher.encrypt("tok"),
+                )
+                db.add(acc)
+                await db.flush()
+                db.add(
+                    ScheduledPost(
+                        account_id=acc.id,
+                        media_type="STORIES",
+                        media_urls_json=["https://res.cloudinary.com/demo/image/upload/st.jpg"],
+                        caption="Story CTA",
+                        hashtags_json=[],
+                        scheduled_for=datetime.now(timezone.utc),
+                        published_at=datetime.now(timezone.utc),
+                        published_permalink="https://instagram.com/stories/act_tester/1/",
+                        status="PUBLISHED",
+                    )
+                )
+                await db.commit()
+                acc_id = acc.id
+
+            act_res = await client.get(f"/api/posts/{acc_id}/activity")
+            assert act_res.status_code == 200
+            events = act_res.json()["events"]
+            assert len(events) == 1
+            assert events[0]["status"] == "PUBLISHED"
+            assert events[0]["media_type"] == "STORIES"
     finally:
         app.dependency_overrides.clear()

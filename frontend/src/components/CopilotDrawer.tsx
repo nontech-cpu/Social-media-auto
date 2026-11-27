@@ -76,9 +76,12 @@ export function CopilotDrawer({
         .catch(() => {});
     };
     fetchHistory();
+    const onActivity = () => fetchHistory();
+    window.addEventListener("socialmediaai:activity-updated", onActivity);
     const timer = setInterval(fetchHistory, 6000);
     return () => {
       active = false;
+      window.removeEventListener("socialmediaai:activity-updated", onActivity);
       clearInterval(timer);
     };
   }, [open, account.id, onPostsUpdated]);

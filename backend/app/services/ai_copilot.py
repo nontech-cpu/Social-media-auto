@@ -485,8 +485,8 @@ class AICopilotService:
             "2. Explain analytics, best times, avoid hours, format performance, Content DNA, and audit findings in simple everyday creator-friendly words — NEVER use technical math/developer jargon like 'Bayesian', 'UCB', 'MAD outlier', 'n_eff', or 'dynamic_niche_prior'.\n"
             "3. `proposed_caption` MUST be written in `brand.language` (English by default unless user explicitly asks for another language).\n\n"
             "ACTION & SCHEDULING RULES (CRITICAL — NEVER CLAIM SOMETHING IS SCHEDULED UNLESS `requested_action` IS SET):\n"
-            "- If the user confirms scheduling (e.g. 'post at 3:36pm today', 'schedule it', 'queue kar do'), set `requested_action='schedule'` "
-            "and set `requested_scheduled_for_iso` to the exact ISO-8601 timestamp using `current_local_iso` timezone (e.g. '2026-11-26T15:36:00+05:30'), or 'best' if they ask you to pick the best time.\n"
+            "- If the user confirms scheduling (e.g. 'post at 3:36pm today', '5pm ko post kar do', 'schedule it', 'queue kar do'), set `requested_action='schedule'` "
+            "and set `requested_scheduled_for_iso` to the exact ISO-8601 timestamp using `current_local_iso` timezone (e.g. '2026-11-27T17:00:00+05:30'), or 'best' if they ask you to pick the best time. If a clock time like '5pm' already passed relative to `current_local_time` and no explicit past date was requested, schedule it for the NEXT upcoming occurrence (tomorrow at that time).\n"
             "- If the user asks to post immediately right now (e.g. 'post now', 'abhi post kar do', 'post it now'), set `requested_action='publish_now'`.\n"
             "- If the user refers to the earlier attached photo/caption/hashtags (e.g. 'same caption and hashtag', 'schedule this', 'have u posted?'), set `use_previous_draft=true`.\n"
             "- Otherwise use `requested_action='draft'` (when creating/updating a draft) or `'chat'` (for pure questions — check `recent_posts_status`, `kpis`, `format_breakdown`, `top_posts`, `bottom_posts`, `weekly_schedule`, `avoid_windows`, `content_dna`, and `ai_audit` to answer accurately with exact numbers, and return empty `proposed_caption`/`proposed_hashtags` when `requested_action='chat'`).\n\n"
@@ -647,13 +647,19 @@ class AICopilotService:
                         meta_client=MetaGraphClient(self.settings),
                         cipher=get_token_cipher(),
                         settings=self.settings,
+                        write_copilot_notification=False,
                     )
                     if post_row.status == "PUBLISHED":
-                        reply_text = f"Published live on Instagram! {post_row.published_permalink}".strip()
+                        link_note = f"\nLink: {post_row.published_permalink}" if post_row.published_permalink else ""
+                        reply_text = f"{action.reply.rstrip()}{link_note}" if action.reply.strip() else f"Published live on Instagram!{link_note}"
                     else:
                         reply_text = f"Publish failed: {post_row.last_error}"
                 else:
-                    reply_text = f"Scheduled in your queue for {local_disp} ({account.timezone})."
+                    reply_text = (
+                        action.reply
+                        if action.reply.strip()
+                        else f"Scheduled in your queue for {local_disp} ({account.timezone})."
+                    )
 
                 structured_payload["scheduled_post"] = {
                     "id": post_row.id,
