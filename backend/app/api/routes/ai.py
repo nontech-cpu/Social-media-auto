@@ -239,11 +239,18 @@ async def get_ai_token_usage(
     for row in rows:
         bucket = by_feature.setdefault(
             row.feature,
-            {"requests": 0, "prompt_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+            {
+                "requests": 0,
+                "prompt_tokens": 0,
+                "output_tokens": 0,
+                "cached_tokens": 0,
+                "total_tokens": 0,
+            },
         )
         bucket["requests"] += 1
         bucket["prompt_tokens"] += row.prompt_tokens
         bucket["output_tokens"] += row.output_tokens
+        bucket["cached_tokens"] += row.cached_tokens
         bucket["total_tokens"] += row.total_tokens
 
     return {
@@ -252,6 +259,7 @@ async def get_ai_token_usage(
         "prompt_tokens": sum(r.prompt_tokens for r in rows),
         "output_tokens": sum(r.output_tokens for r in rows),
         "thoughts_tokens": sum(r.thoughts_tokens for r in rows),
+        "cached_tokens": sum(r.cached_tokens for r in rows),
         "total_tokens": sum(r.total_tokens for r in rows),
         "by_feature": by_feature,
         "recent_logs": [
@@ -261,6 +269,7 @@ async def get_ai_token_usage(
                 "model": r.model,
                 "prompt_tokens": r.prompt_tokens,
                 "output_tokens": r.output_tokens,
+                "cached_tokens": r.cached_tokens,
                 "total_tokens": r.total_tokens,
                 "created_at": r.created_at.isoformat(),
             }

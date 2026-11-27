@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncGenerator
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -58,12 +59,27 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
 
 
 async def init_db() -> None:
-    """Create database tables if they do not exist."""
+    """Create database tables if they do not exist and apply safe column migrations."""
     import app.models.entities  # noqa: F401
 
     engine = get_engine()
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        if conn.dialect.name == "postgresql":
+            await conn.execute(
+                text(
+                    "ALTER TABLE ai_usage_logs ADD COLUMN IF NOT EXISTS cached_tokens INTEGER DEFAULT 0"
+                )
+            )
+        elif conn.dialect.name == "sqlite":
+            cols = (
+                await conn.execute(text("PRAGMA table_info(ai_usage_logs)"))
+            ).fetchall()
+            col_names = {row[1] for row in cols}
+            if "cached_tokens" not in col_names:
+                await conn.execute(
+                    text("ALTER TABLE ai_usage_logs ADD COLUMN cached_tokens INTEGER DEFAULT 0")
+                )
 
 
 async def dispose_db() -> None:

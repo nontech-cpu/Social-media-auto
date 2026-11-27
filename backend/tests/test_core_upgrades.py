@@ -600,6 +600,7 @@ async def test_extract_usage_and_record_ai_usage(db_session) -> None:
             prompt_token_count=315,
             candidates_token_count=85,
             thoughts_token_count=12,
+            cached_content_token_count=140,
             total_token_count=412,
         )
     )
@@ -608,6 +609,7 @@ async def test_extract_usage_and_record_ai_usage(db_session) -> None:
     assert usage["prompt_tokens"] == 315
     assert usage["output_tokens"] == 85
     assert usage["thoughts_tokens"] == 12
+    assert usage["cached_tokens"] == 140
     assert usage["total_tokens"] == 412
 
     record_ai_usage(db_session, account_id=None, feature="copilot_chat", usage=usage)
@@ -616,7 +618,111 @@ async def test_extract_usage_and_record_ai_usage(db_session) -> None:
     rows = (await db_session.execute(select(AIUsageLog))).scalars().all()
     assert len(rows) == 1
     assert rows[0].feature == "copilot_chat"
+    assert rows[0].cached_tokens == 140
     assert rows[0].total_tokens == 412
+
+
+def test_detect_message_language_rule_strict_matching() -> None:
+    from app.services.ai_copilot import _detect_message_language_rule
+
+    assert "ZERO Hinglish" in _detect_message_language_rule("have u posted both the media")
+    assert "German" in _detect_message_language_rule("wie ist meine reach heute?")
+    assert "Hinglish" in _detect_message_language_rule("abhi 5pm ko post kar do bhai")
+    assert "Devanagari" in _detect_message_language_rule("क्या मेरी रील्स आज पोस्ट हुई?")
+
+
+@pytest.mark.asyncio
+async def test_execute_copilot_tools_lazy_dispatch(db_session, test_settings, cipher) -> None:
+    from zoneinfo import ZoneInfo
+    from app.services.ai_copilot import AICopilotService
+    from app.services.analytics_engine import build_analytics_overview
+    from app.services.queue_planner import recommend_slots_for_batch
+
+    account = InstagramAccount(
+        ig_user_id="178414009911",
+        username="tool_tester",
+        timezone="UTC",
+        followers_count=200,
+        encrypted_access_token=cipher.encrypt("tok"),
+        ai_audit_json={"summary": "Strong reels", "winning_format": "REELS", "next_7_days_action_plan": ["Post 3x"]},
+    )
+    db_session.add(account)
+    await db_session.flush()
+    db_session.add(
+        ScheduledPost(
+            account_id=account.id,
+            media_type="REELS",
+            media_urls_json=["https://res.cloudinary.com/demo/video/upload/r.mp4"],
+            caption="Tool test reel",
+            hashtags_json=["#ai"],
+            scheduled_for=datetime.now(timezone.utc),
+            status="PUBLISHED",
+            published_permalink="https://instagram.com/reel/abc/",
+        )
+    )
+    await db_session.commit()
+
+    svc = AICopilotService(test_settings)
+    tz = ZoneInfo("UTC")
+
+    async def _recent(limit: int = 8):
+        return (await db_session.execute(select(ScheduledPost).where(ScheduledPost.account_id == account.id))).scalars().all()
+
+    async def _ov():
+        return await build_analytics_overview(db_session, account)
+
+    async def _slots(count: int = 3, mtype: str | None = None):
+        return await recommend_slots_for_batch(db_session, account, None, count=count, media_type=mtype)
+
+    posts_res = await svc.execute_copilot_tool(
+        tool_name="get_recent_posts",
+        args={"limit": 5},
+        account=account,
+        brand=None,
+        tz=tz,
+        ensure_recent_posts=_recent,
+        ensure_overview=_ov,
+        ensure_slots=_slots,
+    )
+    assert len(posts_res["posts"]) == 1
+    assert posts_res["posts"][0]["published_permalink"] == "https://instagram.com/reel/abc/"
+
+    audit_res = await svc.execute_copilot_tool(
+        tool_name="get_account_audit_and_hashtags",
+        args={},
+        account=account,
+        brand=None,
+        tz=tz,
+        ensure_recent_posts=_recent,
+        ensure_overview=_ov,
+        ensure_slots=_slots,
+    )
+    assert audit_res["audit_summary"] == "Strong reels"
+
+    analytics_res = await svc.execute_copilot_tool(
+        tool_name="get_analytics_summary",
+        args={},
+        account=account,
+        brand=None,
+        tz=tz,
+        ensure_recent_posts=_recent,
+        ensure_overview=_ov,
+        ensure_slots=_slots,
+    )
+    assert "kpis" in analytics_res
+
+    slots_res = await svc.execute_copilot_tool(
+        tool_name="get_best_time_slots",
+        args={"count": 2, "media_type": "REELS"},
+        account=account,
+        brand=None,
+        tz=tz,
+        ensure_recent_posts=_recent,
+        ensure_overview=_ov,
+        ensure_slots=_slots,
+    )
+    assert len(slots_res["recommended_slots"]) == 2
+
 
 
 

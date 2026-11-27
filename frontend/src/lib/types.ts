@@ -252,7 +252,9 @@ export interface TokenUsage {
   prompt_tokens: number;
   output_tokens: number;
   thoughts_tokens?: number;
+  cached_tokens?: number;
   total_tokens: number;
+  tool_calls?: string[];
 }
 
 export interface AIUsageSummary {
@@ -261,6 +263,7 @@ export interface AIUsageSummary {
   prompt_tokens: number;
   output_tokens: number;
   thoughts_tokens: number;
+  cached_tokens: number;
   total_tokens: number;
   by_feature: Record<
     string,
@@ -268,6 +271,7 @@ export interface AIUsageSummary {
       requests: number;
       prompt_tokens: number;
       output_tokens: number;
+      cached_tokens: number;
       total_tokens: number;
     }
   >;
@@ -277,6 +281,7 @@ export interface AIUsageSummary {
     model: string;
     prompt_tokens: number;
     output_tokens: number;
+    cached_tokens: number;
     total_tokens: number;
     created_at: string;
   }>;

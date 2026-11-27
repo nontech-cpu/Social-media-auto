@@ -78,6 +78,7 @@ async def test_health_and_brand_routes_smoke(db_session_factory) -> None:
                         prompt_tokens=420,
                         output_tokens=110,
                         thoughts_tokens=0,
+                        cached_tokens=180,
                         total_tokens=530,
                     )
                 )
@@ -97,8 +98,10 @@ async def test_health_and_brand_routes_smoke(db_session_factory) -> None:
             assert usage_json["request_count"] == 1
             assert usage_json["prompt_tokens"] == 420
             assert usage_json["output_tokens"] == 110
+            assert usage_json["cached_tokens"] == 180
             assert usage_json["total_tokens"] == 530
             assert usage_json["by_feature"]["copilot_chat"]["requests"] == 1
+            assert usage_json["by_feature"]["copilot_chat"]["cached_tokens"] == 180
             assert len(usage_json["recent_logs"]) == 1
     finally:
         app.dependency_overrides.clear()

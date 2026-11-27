@@ -295,8 +295,11 @@ export function CopilotDrawer({
               Gemini Token Usage ({aiUsage.request_count} calls)
             </span>
             <span className="text-slate-400">
-              {aiUsage.prompt_tokens.toLocaleString()} in +{" "}
-              {aiUsage.output_tokens.toLocaleString()} out
+              {aiUsage.prompt_tokens.toLocaleString()} in
+              {aiUsage.cached_tokens > 0
+                ? ` (${aiUsage.cached_tokens.toLocaleString()} cached)`
+                : ""}{" "}
+              + {aiUsage.output_tokens.toLocaleString()} out
             </span>
           </div>
           {Object.keys(aiUsage.by_feature).length > 0 && (
@@ -477,10 +480,19 @@ export function CopilotDrawer({
 
                 {m.role === "assistant" && m.structured_payload?.token_usage && (
                   <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-2 text-[10px] text-slate-400">
-                    <span>{m.structured_payload.token_usage.model}</span>
+                    <span>
+                      {m.structured_payload.token_usage.model}
+                      {m.structured_payload.token_usage.tool_calls &&
+                      m.structured_payload.token_usage.tool_calls.length > 0
+                        ? ` • ${m.structured_payload.token_usage.tool_calls.join(", ")}`
+                        : ""}
+                    </span>
                     <span className="font-medium text-amber-300/90">
-                      ⚡ {m.structured_payload.token_usage.prompt_tokens.toLocaleString()} in +{" "}
-                      {m.structured_payload.token_usage.output_tokens.toLocaleString()} out ={" "}
+                      ⚡ {m.structured_payload.token_usage.prompt_tokens.toLocaleString()} in
+                      {m.structured_payload.token_usage.cached_tokens
+                        ? ` (${m.structured_payload.token_usage.cached_tokens.toLocaleString()} cached)`
+                        : ""}{" "}
+                      + {m.structured_payload.token_usage.output_tokens.toLocaleString()} out ={" "}
                       {m.structured_payload.token_usage.total_tokens.toLocaleString()} tokens
                     </span>
                   </div>

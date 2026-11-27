@@ -17,6 +17,7 @@ from app.models.entities import BrandProfile, CopilotMessage, InstagramAccount, 
 from app.services.analytics_engine import build_analytics_overview
 from app.services.brand_scraper import ScrapedBrand
 from app.services.gemini_helper import (
+    generate_agent_turn_with_tools,
     generate_structured_content,
     generate_structured_with_usage,
     record_ai_usage,
@@ -62,7 +63,9 @@ class GeneratedPostPackage(BaseModel):
 
 
 class CopilotChatAction(BaseModel):
-    reply: str = Field(description="Helpful, concise answer in the user's language (English/Hinglish)")
+    reply: str = Field(
+        description="Helpful, concise answer STRICTLY in the exact language of the Latest User Message (pure English if English, German if German, Hinglish only if user wrote Hinglish)"
+    )
     requested_action: str = Field(
         description="chat | draft | schedule | publish_now — use 'schedule' ONLY when user confirms scheduling, 'publish_now' ONLY when user asks to post immediately"
     )
@@ -85,6 +88,198 @@ class CopilotChatAction(BaseModel):
     batch_topics: list[str] = Field(
         description="List of post topics if user wants multiple posts planned/queued, else empty list"
     )
+
+
+_HINGLISH_MARKERS = frozenset(
+    {
+        "kya",
+        "kyu",
+        "kyun",
+        "nahi",
+        "nhi",
+        "hai",
+        "aur",
+        "bhi",
+        "karo",
+        "krdo",
+        "karna",
+        "krna",
+        "kro",
+        "btao",
+        "batao",
+        "merko",
+        "mereko",
+        "mujhko",
+        "apna",
+        "apne",
+        "aapke",
+        "abhi",
+        "kab",
+        "kaise",
+        "konsa",
+        "konsi",
+        "bhai",
+        "bhy",
+        "yaar",
+        "chahiye",
+        "chaiye",
+        "hogya",
+        "mein",
+        "toh",
+        "woh",
+        "yeh",
+        "iska",
+        "uska",
+        "thoda",
+        "zyada",
+        "jayda",
+        "achha",
+        "theek",
+        "baje",
+        "kal",
+        "aaj",
+        "subah",
+        "shaam",
+        "kitne",
+        "kitna",
+        "daal",
+        "daalni",
+        "dalni",
+        "lagado",
+        "karde",
+        "samjhao",
+        "likho",
+    }
+)
+
+
+def _detect_message_language_rule(text: str) -> str:
+    """Detect script/Hinglish cues without regex so Copilot mirrors the latest message language."""
+    for ch in text:
+        if "\u0900" <= ch <= "\u097f":
+            return "Hindi (Devanagari script — reply strictly in Hindi)"
+    tokens = "".join(ch.lower() if ch.isalnum() else " " for ch in text).split()
+    if any(tok in _HINGLISH_MARKERS for tok in tokens):
+        return "Hinglish (user wrote Romanized Hindi — reply naturally in Hinglish)"
+    return (
+        "EXACT same language as Latest User Message (if English -> 100% pure English with ZERO Hinglish words; "
+        "if German -> 100% German; if French/Spanish/other -> that exact language). "
+        "NEVER mirror Hinglish or another language from earlier chat history turns."
+    )
+
+
+def _needs_structured_action_fallback(text: str, attached_urls: list[str]) -> bool:
+    if attached_urls:
+        return True
+    lower = text.lower()
+    action_cues = (
+        "schedule",
+        "publish",
+        "queue",
+        "post now",
+        "draft",
+        "caption",
+        "hashtag",
+        "story",
+        "stories",
+        "slot",
+        "best time",
+        "daal",
+        "lagao",
+        "kar do",
+        "kr do",
+        "krdo",
+        "post kar",
+        "post kr",
+    )
+    return any(cue in lower for cue in action_cues)
+
+
+_COPILOT_TOOLS: list[types.Tool] = [
+    types.Tool(
+        function_declarations=[
+            types.FunctionDeclaration(
+                name="get_recent_posts",
+                description=(
+                    "Fetch recent published, failed, and queued/scheduled Instagram posts plus queue count. "
+                    "Call this when user asks about post status, whether media posted, permalinks, or queued items."
+                ),
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={"limit": types.Schema(type=types.Type.INTEGER)},
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="get_analytics_summary",
+                description=(
+                    "Fetch reach KPIs, engagement rate, discovery multiplier, save/share rates, format breakdown, "
+                    "Content DNA, top/bottom posts, profile funnel, and story analytics. "
+                    "Call this ONLY when user asks about performance, analytics, insights, or growth metrics."
+                ),
+                parameters=types.Schema(type=types.Type.OBJECT, properties={}),
+            ),
+            types.FunctionDeclaration(
+                name="get_best_time_slots",
+                description=(
+                    "Fetch ranked optimal posting time windows and windows to avoid. "
+                    "Call this when user asks when to post or asks you to pick the best time."
+                ),
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "count": types.Schema(type=types.Type.INTEGER),
+                        "media_type": types.Schema(type=types.Type.STRING),
+                    },
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="get_account_audit_and_hashtags",
+                description=(
+                    "Fetch AI account audit summary, next 7-day plan, and top historical hashtags. "
+                    "Call this when user asks for strategy/audit advice or hashtag recommendations."
+                ),
+                parameters=types.Schema(type=types.Type.OBJECT, properties={}),
+            ),
+            types.FunctionDeclaration(
+                name="complete_response",
+                description=(
+                    "Submit your final structured Copilot response (use this to draft captions, schedule posts, "
+                    "publish immediately, recommend slots, or finish a structured answer)."
+                ),
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "reply": types.Schema(
+                            type=types.Type.STRING,
+                            description="Concise reply STRICTLY in the exact language of Latest User Message.",
+                        ),
+                        "requested_action": types.Schema(
+                            type=types.Type.STRING,
+                            description="chat | draft | schedule | publish_now",
+                        ),
+                        "requested_scheduled_for_iso": types.Schema(type=types.Type.STRING),
+                        "use_previous_draft": types.Schema(type=types.Type.BOOLEAN),
+                        "proposed_caption": types.Schema(type=types.Type.STRING),
+                        "proposed_hashtags": types.Schema(
+                            type=types.Type.ARRAY,
+                            items=types.Schema(type=types.Type.STRING),
+                        ),
+                        "proposed_media_type": types.Schema(
+                            type=types.Type.STRING,
+                            description="REELS | IMAGE | CAROUSEL | STORIES",
+                        ),
+                        "should_recommend_best_slot": types.Schema(type=types.Type.BOOLEAN),
+                        "batch_topics": types.Schema(
+                            type=types.Type.ARRAY,
+                            items=types.Schema(type=types.Type.STRING),
+                        ),
+                    },
+                    required=["reply", "requested_action"],
+                ),
+            ),
+        ]
+    )
+]
 
 
 class AICopilotService:
@@ -319,8 +514,10 @@ class AICopilotService:
                 .limit(10)
             )
         ).scalars().all()
+        # Keep only the 4 most recent short turns to limit tokens and prevent old-turn language drift
         recent_history = [
-            {"role": m.role, "content": m.content} for m in reversed(history_rows)
+            {"role": m.role, "text": m.content[:180]}
+            for m in reversed(history_rows[:4])
         ]
 
         # Recover most recent attached media & draft from conversation history for multi-turn continuity
@@ -343,17 +540,6 @@ class AICopilotService:
             if prior_media_urls and prior_caption and prior_hashtags:
                 break
 
-        overview = await build_analytics_overview(db, account)
-        recent_posts = (
-            await db.execute(
-                select(ScheduledPost)
-                .where(ScheduledPost.account_id == account.id)
-                .order_by(ScheduledPost.updated_at.desc())
-                .limit(10)
-            )
-        ).scalars().all()
-        queued_posts = [p for p in recent_posts if p.status in ("QUEUED", "PUBLISHING")]
-
         try:
             tz = ZoneInfo(account.timezone)
         except (ZoneInfoNotFoundError, KeyError):
@@ -362,37 +548,7 @@ class AICopilotService:
         current_local_str = now_local.strftime("%a, %b %d at %I:%M %p")
         current_local_iso = now_local.isoformat(timespec="seconds")
 
-        recent_posts_status = []
-        for p in recent_posts:
-            sched_utc = (
-                p.scheduled_for.replace(tzinfo=timezone.utc)
-                if p.scheduled_for.tzinfo is None
-                else p.scheduled_for
-            )
-            pub_disp = None
-            if p.published_at is not None:
-                pub_utc = (
-                    p.published_at.replace(tzinfo=timezone.utc)
-                    if p.published_at.tzinfo is None
-                    else p.published_at
-                )
-                pub_disp = pub_utc.astimezone(tz).strftime("%a, %b %d at %I:%M %p")
-            recent_posts_status.append(
-                {
-                    "id": p.id,
-                    "media_type": p.media_type,
-                    "status": p.status,
-                    "scheduled_for_local": sched_utc.astimezone(tz).strftime("%a, %b %d at %I:%M %p"),
-                    "published_at_local": pub_disp,
-                    "published_permalink": p.published_permalink,
-                    "last_error": p.last_error,
-                    "caption_preview": p.caption[:100],
-                }
-            )
         slot_media_hint = media_type or prior_media_type or ("CAROUSEL" if len(attached_urls) > 1 else None)
-        precomputed_slots = await recommend_slots_for_batch(
-            db, account, brand, count=3, media_type=slot_media_hint
-        )
 
         # Fetch up to 3 attached images so Gemini Vision can inspect the actual visual content
         media_parts: list[types.Part] = []
@@ -415,104 +571,170 @@ class AICopilotService:
                     except Exception:
                         continue
 
-        rec_info = overview.get("recommendations") or {}
-        context = {
-            "current_local_time": current_local_str,
-            "current_local_iso": current_local_iso,
+        # Level 3 lazy per-turn caches: DB analytics / posts / slots load ONLY when Gemini calls a tool or needs slots
+        turn_cache: dict[str, Any] = {
+            "overview": None,
+            "slots": None,
+            "recent_posts": None,
+            "tool_results": {},
+        }
+
+        async def _ensure_overview() -> dict[str, Any]:
+            if turn_cache["overview"] is None:
+                turn_cache["overview"] = await build_analytics_overview(db, account)
+            return turn_cache["overview"]
+
+        async def _ensure_slots(req_count: int = 3, req_media_type: str | None = None) -> list[Any]:
+            hint = req_media_type or slot_media_hint
+            if turn_cache["slots"] is None or len(turn_cache["slots"]) < req_count:
+                turn_cache["slots"] = await recommend_slots_for_batch(
+                    db, account, brand, count=max(3, req_count), media_type=hint
+                )
+            return turn_cache["slots"]
+
+        async def _ensure_recent_posts(limit: int = 8) -> list[ScheduledPost]:
+            if turn_cache["recent_posts"] is None:
+                turn_cache["recent_posts"] = (
+                    await db.execute(
+                        select(ScheduledPost)
+                        .where(ScheduledPost.account_id == account.id)
+                        .order_by(ScheduledPost.updated_at.desc())
+                        .limit(max(8, min(limit, 20)))
+                    )
+                ).scalars().all()
+            return turn_cache["recent_posts"]
+
+        async def _tool_executor(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+            result = await self.execute_copilot_tool(
+                tool_name=tool_name,
+                args=args,
+                account=account,
+                brand=brand,
+                tz=tz,
+                ensure_recent_posts=_ensure_recent_posts,
+                ensure_overview=_ensure_overview,
+                ensure_slots=_ensure_slots,
+            )
+            turn_cache["tool_results"][tool_name] = result
+            return result
+
+        # Level 2: Static cache-friendly prefix in system_instruction (never invalidated by timestamps/history)
+        static_profile = {
+            "username": account.username,
+            "name": account.name,
+            "followers": account.followers_count,
             "timezone": account.timezone,
-            "account": overview["account"],
-            "account_insights": overview.get("account_insights"),
-            "kpis": overview["kpis"],
-            "has_historical_data": overview["has_historical_data"],
-            "confidence_tier": rec_info.get("confidence_tier", "learning"),
-            "posts_analyzed_count": rec_info.get("posts_analyzed_count", 0),
-            "lookback_days": rec_info.get("lookback_days", 90),
-            "prior_source": rec_info.get("prior_source", "uniform"),
-            "min_gap_hours": rec_info.get("min_gap_hours", 12),
-            "format_breakdown": overview["format_breakdown"],
-            "content_dna": overview.get("content_dna"),
-            "top_posts": [
-                {
-                    "media_type": p["media_type"],
-                    "reach": p["reach"],
-                    "likes": p["likes"],
-                    "comments": p["comments"],
-                    "saves": p["saves"],
-                    "shares": p["shares"],
-                    "engagement_rate": p["engagement_rate"],
-                    "published_at": p["published_at"],
-                    "caption_preview": p["caption"][:120],
-                }
-                for p in overview.get("top_posts", [])[:5]
-            ],
-            "bottom_posts": overview.get("bottom_posts", []),
-            "top_windows": overview["top_windows"][:5],
-            "weekly_schedule": rec_info.get("weekly_schedule", [])[:7],
-            "avoid_windows": rec_info.get("avoid_windows", [])[:5],
-            "next_recommended_slots": [
-                {
-                    "local_display": s.local_display,
-                    "combined_score": s.combined_score,
-                    "slot_type": s.slot_type,
-                    "lift_vs_baseline": s.lift_vs_baseline,
-                    "rationale": s.rationale,
-                }
-                for s in precomputed_slots
-            ],
-            "top_hashtags": overview["hashtag_leaderboard"][:8],
-            "queue_stats": overview.get("queue_stats"),
-            "ai_audit": overview.get("ai_audit"),
-            "existing_queue": summarize_existing_queue(queued_posts, account.timezone),
-            "recent_posts_status": recent_posts_status,
-            "attached_media": {
-                "has_media": bool(attached_urls),
+            "brand_name": brand.brand_name if brand else account.name,
+            "niche": brand.niche if brand else "",
+            "tone": brand.tone_of_voice if brand else "",
+            "caption_language": brand.language if brand else "English",
+            "goal_posts_per_week": brand.posting_goal_per_week if brand else 4,
+        }
+        static_system_instruction = (
+            "You are SocialMediaAI's Instagram Growth & Scheduling Copilot. You CAN schedule and publish posts directly.\n"
+            f"Account & Brand Profile (static): {json.dumps(static_profile)}\n\n"
+            "CRITICAL LANGUAGE & TONE RULES:\n"
+            "1. `reply` language MUST match ONLY the Latest User Message's language (English -> pure English with ZERO Hinglish; "
+            "German -> German; French -> French; Hindi -> Hindi; Hinglish -> Hinglish). NEVER switch to Hinglish or another language because of older chat turns.\n"
+            "2. Explain insights in plain everyday creator language — NEVER use developer/math jargon like 'Bayesian', 'UCB', 'MAD outlier', 'n_eff', or 'dynamic_niche_prior'.\n"
+            "3. `proposed_caption` MUST be in `caption_language` unless the user explicitly asks for another caption language.\n\n"
+            "TOOL & ACTION RULES:\n"
+            "- NEVER guess post statuses, metrics, or best slots — call `get_recent_posts`, `get_analytics_summary`, `get_best_time_slots`, or `get_account_audit_and_hashtags` first when data is needed.\n"
+            "- If the user asks to draft, schedule (`schedule`), publish right now (`publish_now`), plan a batch, or recommend slots, call `complete_response` with the exact fields.\n"
+            "- For `schedule`, convert clock times relative to `current_local_iso` (timezone preserved; if today's clock time already passed, use tomorrow at that time), or `'best'` if user asks for the best slot.\n"
+            "- Set `use_previous_draft=true` when referencing the prior draft/attached media.\n"
+            "- For Instagram Stories (`proposed_media_type='STORIES'`), adapt 100% creatively to any user style/vibe/poll/CTA requested and put overlay/CTA ideas in `proposed_caption`."
+        )
+
+        # Level 1: Minimal dynamic turn payload (~250-450 tokens vs ~8k full dump)
+        turn_payload: dict[str, Any] = {
+            "recent_chat": recent_history,
+        }
+        if attached_urls:
+            turn_payload["attached_media"] = {
                 "media_type": media_type or ("CAROUSEL" if len(attached_urls) > 1 else "REELS"),
                 "count": len(attached_urls),
                 "visual_images_provided": len(media_parts),
-            },
-            "previous_draft_in_chat": {
+            }
+        if prior_media_urls or prior_caption:
+            turn_payload["previous_draft_in_chat"] = {
                 "has_media": bool(prior_media_urls),
                 "media_type": prior_media_type,
-                "caption": prior_caption,
-                "hashtags": prior_hashtags,
-            },
-            "brand": {
-                "name": brand.brand_name if brand else account.name,
-                "niche": brand.niche if brand else "",
-                "tone": brand.tone_of_voice if brand else "",
-                "language": brand.language if brand else "English",
-                "posting_goal_per_week": brand.posting_goal_per_week if brand else 4,
-            },
-            "recent_chat": recent_history,
-        }
+                "caption_preview": prior_caption[:240],
+                "hashtags": prior_hashtags[:8],
+            }
+        turn_payload["current_local_time"] = current_local_str
+        turn_payload["current_local_iso"] = current_local_iso
+        turn_payload["strict_reply_language"] = _detect_message_language_rule(user_message)
 
-        prompt = (
-            "You are SocialMediaAI's built-in Instagram Growth & Scheduling Agent. You CAN schedule and publish posts directly when the user asks!\n"
-            "STRICT LANGUAGE & TONE RULES:\n"
-            "1. `reply` MUST match the exact language/style of the user's Latest User Message "
-            "(if user writes English -> reply in English; if Hinglish -> reply in natural Hinglish; if Hindi -> Hindi).\n"
-            "2. Explain analytics, best times, avoid hours, format performance, Content DNA, and audit findings in simple everyday creator-friendly words — NEVER use technical math/developer jargon like 'Bayesian', 'UCB', 'MAD outlier', 'n_eff', or 'dynamic_niche_prior'.\n"
-            "3. `proposed_caption` MUST be written in `brand.language` (English by default unless user explicitly asks for another language).\n\n"
-            "ACTION & SCHEDULING RULES (CRITICAL — NEVER CLAIM SOMETHING IS SCHEDULED UNLESS `requested_action` IS SET):\n"
-            "- If the user confirms scheduling (e.g. 'post at 3:36pm today', '5pm ko post kar do', 'schedule it', 'queue kar do'), set `requested_action='schedule'` "
-            "and set `requested_scheduled_for_iso` to the exact ISO-8601 timestamp using `current_local_iso` timezone (e.g. '2026-11-27T17:00:00+05:30'), or 'best' if they ask you to pick the best time. If a clock time like '5pm' already passed relative to `current_local_time` and no explicit past date was requested, schedule it for the NEXT upcoming occurrence (tomorrow at that time).\n"
-            "- If the user asks to post immediately right now (e.g. 'post now', 'abhi post kar do', 'post it now'), set `requested_action='publish_now'`.\n"
-            "- If the user refers to the earlier attached photo/caption/hashtags (e.g. 'same caption and hashtag', 'schedule this', 'have u posted?'), set `use_previous_draft=true`.\n"
-            "- Otherwise use `requested_action='draft'` (when creating/updating a draft) or `'chat'` (for pure questions — check `recent_posts_status`, `kpis`, `format_breakdown`, `top_posts`, `bottom_posts`, `weekly_schedule`, `avoid_windows`, `content_dna`, and `ai_audit` to answer accurately with exact numbers, and return empty `proposed_caption`/`proposed_hashtags` when `requested_action='chat'`).\n\n"
-            "DATA, STORY & TIMING RULES:\n"
-            "- If images are attached in this turn, analyze what is actually visible in the image(s) to craft a specific, relevant caption or Story overlay idea.\n"
-            "- If user asks to create/schedule/post an Instagram Story (in ANY custom style, vibe, poll, minimalist, bold, BTS, meme, product teaser, etc.), set `proposed_media_type='STORIES'` and adapt 100% creatively to their exact requested style (never force a single rigid Story template; suggest on-screen text/sticker ideas in `proposed_caption` and keep `proposed_hashtags` optional/minimal).\n"
-            "- Recommend posting timing dynamically based on the content/format AND the account's real historical performance (`format_breakdown`, `top_windows`, `has_historical_data`) and `existing_queue`.\n"
-            f"Context JSON: {json.dumps(context)}\n"
+        user_prompt_text = (
+            f"Turn Context JSON: {json.dumps(turn_payload)}\n"
             f"Latest User Message: {user_message}"
         )
-        action, chat_usage = await generate_structured_with_usage(
+
+        finish_args, plain_reply, chat_usage = await generate_agent_turn_with_tools(
             self.settings,
-            prompt=prompt,
-            response_schema=CopilotChatAction,
-            temperature=0.4,
+            system_instruction=static_system_instruction,
+            user_text=user_prompt_text,
+            tools=_COPILOT_TOOLS,
+            tool_executor=_tool_executor,
+            temperature=0.35,
             media_parts=media_parts or None,
         )
+
+        action: CopilotChatAction
+        if finish_args is not None:
+            action = CopilotChatAction(
+                reply=str(finish_args.get("reply") or plain_reply or ""),
+                requested_action=str(finish_args.get("requested_action") or "chat"),
+                requested_scheduled_for_iso=str(finish_args.get("requested_scheduled_for_iso") or ""),
+                use_previous_draft=bool(finish_args.get("use_previous_draft", False)),
+                proposed_caption=str(finish_args.get("proposed_caption") or ""),
+                proposed_hashtags=[str(t) for t in (finish_args.get("proposed_hashtags") or [])],
+                proposed_media_type=str(
+                    finish_args.get("proposed_media_type")
+                    or media_type
+                    or prior_media_type
+                    or "REELS"
+                ),
+                should_recommend_best_slot=bool(
+                    finish_args.get("should_recommend_best_slot", False)
+                ),
+                batch_topics=[str(t) for t in (finish_args.get("batch_topics") or [])],
+            )
+        elif plain_reply and not _needs_structured_action_fallback(user_message, attached_urls):
+            action = CopilotChatAction(
+                reply=plain_reply,
+                requested_action="chat",
+                requested_scheduled_for_iso="",
+                use_previous_draft=False,
+                proposed_caption="",
+                proposed_hashtags=[],
+                proposed_media_type=media_type or prior_media_type or "REELS",
+                should_recommend_best_slot=False,
+                batch_topics=[],
+            )
+        else:
+            fallback_prompt = (
+                f"Turn Context JSON: {json.dumps(turn_payload)}\n"
+                f"Fetched Tool Data: {json.dumps(turn_cache['tool_results'])}\n"
+                f"Latest User Message: {user_message}"
+            )
+            action, fb_usage = await generate_structured_with_usage(
+                self.settings,
+                prompt=fallback_prompt,
+                system_instruction=static_system_instruction,
+                response_schema=CopilotChatAction,
+                temperature=0.35,
+                media_parts=media_parts or None,
+            )
+            chat_usage["prompt_tokens"] += fb_usage["prompt_tokens"]
+            chat_usage["output_tokens"] += fb_usage["output_tokens"]
+            chat_usage["thoughts_tokens"] += fb_usage["thoughts_tokens"]
+            chat_usage["cached_tokens"] += fb_usage.get("cached_tokens", 0)
+            chat_usage["total_tokens"] += fb_usage["total_tokens"]
+            chat_usage["model"] = fb_usage["model"]
+
         record_ai_usage(db, account_id=account.id, feature="copilot_chat", usage=chat_usage)
 
         structured_payload: dict[str, Any] = {}
@@ -576,13 +798,7 @@ class AICopilotService:
 
             if action.should_recommend_best_slot or effective_caption or effective_media_urls:
                 slot_count = max(1, len(action.batch_topics))
-                slots = (
-                    precomputed_slots[:slot_count]
-                    if slot_count <= len(precomputed_slots)
-                    else await recommend_slots_for_batch(
-                        db, account, brand, count=slot_count, media_type=slot_media_hint
-                    )
-                )
+                slots = (await _ensure_slots(slot_count, slot_media_hint))[:slot_count]
                 structured_payload["recommended_slots"] = [
                     {
                         "scheduled_for": s.scheduled_for_utc.isoformat(),
@@ -609,6 +825,7 @@ class AICopilotService:
             else:
                 target_dt = datetime.now(timezone.utc)
                 rationale_text = "Scheduled via AI Copilot chat."
+                predicted_slot_score = 0.0
                 if action.requested_action == "schedule":
                     iso_val = action.requested_scheduled_for_iso.strip()
                     if iso_val and iso_val.lower() != "best":
@@ -619,11 +836,15 @@ class AICopilotService:
                             target_dt = parsed_dt.astimezone(timezone.utc)
                             rationale_text = f"Scheduled at user-requested time ({parsed_dt.astimezone(tz).strftime('%a, %b %d at %I:%M %p')})."
                         except ValueError:
-                            target_dt = precomputed_slots[0].scheduled_for_utc
-                            rationale_text = precomputed_slots[0].rationale
+                            slots = await _ensure_slots(1, slot_media_hint)
+                            target_dt = slots[0].scheduled_for_utc
+                            rationale_text = slots[0].rationale
+                            predicted_slot_score = slots[0].combined_score
                     else:
-                        target_dt = precomputed_slots[0].scheduled_for_utc
-                        rationale_text = precomputed_slots[0].rationale
+                        slots = await _ensure_slots(1, slot_media_hint)
+                        target_dt = slots[0].scheduled_for_utc
+                        rationale_text = slots[0].rationale
+                        predicted_slot_score = slots[0].combined_score
 
                 post_row = ScheduledPost(
                     account_id=account.id,
@@ -636,7 +857,7 @@ class AICopilotService:
                     timezone=account.timezone,
                     status="PUBLISHING" if action.requested_action == "publish_now" else "QUEUED",
                     ai_rationale=rationale_text,
-                    predicted_score=precomputed_slots[0].combined_score if precomputed_slots else 0.0,
+                    predicted_score=predicted_slot_score,
                 )
                 db.add(post_row)
                 await db.commit()
@@ -698,3 +919,126 @@ class AICopilotService:
             "structured_payload": structured_payload or None,
             "created_at": assistant_msg.created_at.isoformat(),
         }
+
+    async def execute_copilot_tool(
+        self,
+        *,
+        tool_name: str,
+        args: dict[str, Any],
+        account: InstagramAccount,
+        brand: BrandProfile | None,
+        tz: ZoneInfo,
+        ensure_recent_posts: Any,
+        ensure_overview: Any,
+        ensure_slots: Any,
+    ) -> dict[str, Any]:
+        """Dispatch Level 3 on-demand Copilot data tools cleanly without loading unused context."""
+        if tool_name == "get_recent_posts":
+            limit = int(args.get("limit") or 8)
+            rows = await ensure_recent_posts(limit)
+            queued = [p for p in rows if p.status in ("QUEUED", "PUBLISHING")]
+            formatted = []
+            for p in rows[:limit]:
+                sched_utc = (
+                    p.scheduled_for.replace(tzinfo=timezone.utc)
+                    if p.scheduled_for.tzinfo is None
+                    else p.scheduled_for
+                )
+                pub_disp = None
+                if p.published_at is not None:
+                    pub_utc = (
+                        p.published_at.replace(tzinfo=timezone.utc)
+                        if p.published_at.tzinfo is None
+                        else p.published_at
+                    )
+                    pub_disp = pub_utc.astimezone(tz).strftime("%a, %b %d at %I:%M %p")
+                formatted.append(
+                    {
+                        "id": p.id,
+                        "media_type": p.media_type,
+                        "status": p.status,
+                        "scheduled_for_local": sched_utc.astimezone(tz).strftime("%a, %b %d at %I:%M %p"),
+                        "published_at_local": pub_disp,
+                        "published_permalink": p.published_permalink,
+                        "last_error": p.last_error,
+                        "caption_preview": p.caption[:100],
+                    }
+                )
+            return {
+                "posts": formatted,
+                "existing_queue": summarize_existing_queue(queued, account.timezone),
+            }
+
+        if tool_name == "get_analytics_summary":
+            ov = await ensure_overview()
+            return {
+                "kpis": ov["kpis"],
+                "account_insights": ov.get("account_insights"),
+                "discovery_metrics": ov.get("discovery_metrics"),
+                "profile_funnel": ov.get("profile_funnel"),
+                "story_analytics": {
+                    k: v
+                    for k, v in (ov.get("story_analytics") or {}).items()
+                    if k != "recent_stories"
+                },
+                "format_breakdown": ov["format_breakdown"],
+                "content_dna": ov.get("content_dna"),
+                "top_posts": [
+                    {
+                        "media_type": p["media_type"],
+                        "reach": p["reach"],
+                        "engagement_rate": p["engagement_rate"],
+                        "format_multiplier": p.get("format_multiplier"),
+                        "caption_preview": p["caption"][:100],
+                    }
+                    for p in ov.get("top_posts", [])[:3]
+                ],
+                "bottom_posts": [
+                    {
+                        "media_type": p["media_type"],
+                        "reach": p["reach"],
+                        "format_multiplier": p.get("format_multiplier"),
+                        "caption_preview": p["caption"][:80],
+                    }
+                    for p in ov.get("bottom_posts", [])[:2]
+                ],
+            }
+
+        if tool_name == "get_best_time_slots":
+            count = max(1, min(int(args.get("count") or 3), 7))
+            req_media = str(args.get("media_type") or "").strip() or None
+            slots = await ensure_slots(count, req_media)
+            ov = await ensure_overview()
+            rec_info = ov.get("recommendations") or {}
+            return {
+                "confidence_tier": rec_info.get("confidence_tier", "learning"),
+                "posts_analyzed_count": rec_info.get("posts_analyzed_count", 0),
+                "min_gap_hours": rec_info.get("min_gap_hours", 12),
+                "recommended_slots": [
+                    {
+                        "local_display": s.local_display,
+                        "combined_score": s.combined_score,
+                        "slot_type": s.slot_type,
+                        "lift_vs_baseline": s.lift_vs_baseline,
+                        "rationale": s.rationale,
+                    }
+                    for s in slots[:count]
+                ],
+                "avoid_windows": rec_info.get("avoid_windows", [])[:4],
+            }
+
+        if tool_name == "get_account_audit_and_hashtags":
+            ov = await ensure_overview()
+            audit = ov.get("ai_audit") or {}
+            return {
+                "audit_summary": audit.get("summary", ""),
+                "winning_format": audit.get("winning_format", ""),
+                "best_posting_strategy": audit.get("best_posting_strategy", ""),
+                "next_7_days_action_plan": (audit.get("next_7_days_action_plan") or [])[:4],
+                "top_hashtags": [
+                    {"hashtag": h["hashtag"], "avg_reach": h.get("account_avg_reach")}
+                    for h in ov.get("hashtag_leaderboard", [])[:8]
+                ],
+            }
+
+        return {"error": f"Unknown tool: {tool_name}"}
