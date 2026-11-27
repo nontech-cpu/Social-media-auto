@@ -25,9 +25,12 @@ def get_engine() -> AsyncEngine:
     global _engine
     if _engine is None:
         settings = get_settings()
-        connect_args = {}
+        connect_args: dict[str, object] = {}
         if settings.database_url.startswith("sqlite"):
             connect_args = {"check_same_thread": False}
+        elif settings.database_url.startswith("postgresql+asyncpg"):
+            # Required for Neon/Supabase PgBouncer pooler endpoints to avoid DuplicatePreparedStatementError
+            connect_args = {"statement_cache_size": 0}
         _engine = create_async_engine(
             settings.database_url,
             echo=False,
