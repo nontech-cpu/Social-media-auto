@@ -20,7 +20,7 @@ from app.models.entities import (
     NichePriorCache,
     ScheduledPost,
 )
-from app.services.gemini_helper import generate_structured_content
+from app.services.gemini_helper import generate_structured_with_usage, record_ai_usage
 
 DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 EPS = 1e-9
@@ -588,7 +588,7 @@ async def get_or_compute_dynamic_niche_prior(
         "and 0.3-0.5 are overnight sleeping hours)."
     )
     try:
-        generated = await generate_structured_content(
+        generated, usage = await generate_structured_with_usage(
             cfg,
             prompt=prompt,
             response_schema=DynamicNichePriorSchema,
@@ -604,6 +604,7 @@ async def get_or_compute_dynamic_niche_prior(
             cached.rationale = generated.rationale
             cached.computed_at = now
             cached.expires_at = now + timedelta(days=14)
+            record_ai_usage(db, account_id=None, feature="niche_prior", usage=usage)
             await db.commit()
             return norm_grid, generated.rationale
     except Exception:

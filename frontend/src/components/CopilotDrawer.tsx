@@ -12,7 +12,7 @@ import {
   Zap,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { CopilotMessage, InstagramAccount } from "@/lib/types";
+import type { AIUsageSummary, CopilotMessage, InstagramAccount } from "@/lib/types";
 
 interface CopilotDrawerProps {
   open: boolean;
@@ -53,11 +53,21 @@ export function CopilotDrawer({
   const [actingId, setActingId] = useState<string | null>(null);
   const [statusNote, setStatusNote] = useState("");
   const [error, setError] = useState("");
+  const [aiUsage, setAiUsage] = useState<AIUsageSummary | null>(null);
+  const [showUsageDetails, setShowUsageDetails] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
     let active = true;
+    const fetchUsage = () => {
+      api
+        .getAiUsage(account.id)
+        .then((u) => {
+          if (active) setAiUsage(u);
+        })
+        .catch(() => {});
+    };
     const fetchHistory = () => {
       api
         .getChatHistory(account.id)
@@ -76,7 +86,11 @@ export function CopilotDrawer({
         .catch(() => {});
     };
     fetchHistory();
-    const onActivity = () => fetchHistory();
+    fetchUsage();
+    const onActivity = () => {
+      fetchHistory();
+      fetchUsage();
+    };
     window.addEventListener("socialmediaai:activity-updated", onActivity);
     const timer = setInterval(fetchHistory, 6000);
     return () => {
@@ -164,6 +178,7 @@ export function CopilotDrawer({
         media_type: sendType,
       });
       setMessages((prev) => [...prev, reply]);
+      api.getAiUsage(account.id).then(setAiUsage).catch(() => {});
       if (reply.structured_payload?.scheduled_post) {
         onPostsUpdated();
       }
@@ -251,14 +266,53 @@ export function CopilotDrawer({
             </p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-lg p-1.5 text-slate-400 hover:bg-white/5 hover:text-white"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-2">
+          {aiUsage && (
+            <button
+              type="button"
+              onClick={() => setShowUsageDetails((v) => !v)}
+              title="View Gemini token usage breakdown"
+              className="inline-flex items-center gap-1 rounded-lg border border-amber-400/30 bg-amber-500/10 px-2.5 py-1 text-[11px] font-semibold text-amber-200 hover:bg-amber-500/20"
+            >
+              <Zap className="h-3 w-3 text-amber-300" />
+              {aiUsage.total_tokens.toLocaleString()} tokens
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-slate-400 hover:bg-white/5 hover:text-white"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </div>
+
+      {showUsageDetails && aiUsage && (
+        <div className="border-b border-white/10 bg-black/40 px-5 py-3 text-[11px] text-slate-300">
+          <div className="flex items-center justify-between">
+            <span className="font-semibold text-amber-200">
+              Gemini Token Usage ({aiUsage.request_count} calls)
+            </span>
+            <span className="text-slate-400">
+              {aiUsage.prompt_tokens.toLocaleString()} in +{" "}
+              {aiUsage.output_tokens.toLocaleString()} out
+            </span>
+          </div>
+          {Object.keys(aiUsage.by_feature).length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {Object.entries(aiUsage.by_feature).map(([feat, stats]) => (
+                <span
+                  key={feat}
+                  className="rounded-md border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-slate-300"
+                >
+                  {feat.split("_").join(" ")}: {stats.total_tokens.toLocaleString()} ({stats.requests}x)
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="flex-1 space-y-4 overflow-y-auto p-5">
         {messages.length === 0 && (
@@ -418,6 +472,17 @@ export function CopilotDrawer({
                         </button>
                       </>
                     )}
+                  </div>
+                )}
+
+                {m.role === "assistant" && m.structured_payload?.token_usage && (
+                  <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-2 text-[10px] text-slate-400">
+                    <span>{m.structured_payload.token_usage.model}</span>
+                    <span className="font-medium text-amber-300/90">
+                      ⚡ {m.structured_payload.token_usage.prompt_tokens.toLocaleString()} in +{" "}
+                      {m.structured_payload.token_usage.output_tokens.toLocaleString()} out ={" "}
+                      {m.structured_payload.token_usage.total_tokens.toLocaleString()} tokens
+                    </span>
                   </div>
                 )}
               </div>

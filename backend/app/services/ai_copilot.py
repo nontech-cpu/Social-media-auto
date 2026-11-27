@@ -16,7 +16,11 @@ from app.core.security import get_token_cipher
 from app.models.entities import BrandProfile, CopilotMessage, InstagramAccount, ScheduledPost
 from app.services.analytics_engine import build_analytics_overview
 from app.services.brand_scraper import ScrapedBrand
-from app.services.gemini_helper import generate_structured_content
+from app.services.gemini_helper import (
+    generate_structured_content,
+    generate_structured_with_usage,
+    record_ai_usage,
+)
 from app.services.hashtag_engine import HashtagCandidate, HashtagEngine
 from app.services.meta_client import MetaGraphClient
 from app.services.queue_planner import recommend_slots_for_batch, summarize_existing_queue
@@ -176,14 +180,16 @@ class AICopilotService:
             "compare `top_posts` vs `bottom_posts` and `content_dna`, and give a concrete 7-day plan.\n"
             f"Metrics JSON: {json.dumps(audit_input)}"
         )
-        parsed = await generate_structured_content(
+        parsed, usage = await generate_structured_with_usage(
             self.settings,
             prompt=prompt,
             response_schema=AccountAuditOutput,
             temperature=0.3,
         )
         audit = parsed.model_dump()
+        audit["token_usage"] = usage
         account.ai_audit_json = audit
+        record_ai_usage(db, account_id=account.id, feature="account_audit", usage=usage)
         await db.commit()
         return audit
 
@@ -240,16 +246,18 @@ class AICopilotService:
                 "- Include value-packed body + clear save/share/comment CTA.\n"
                 "- Do NOT append hashtags inside `caption_body` or `recommended_caption` (hashtags go in `hashtags`)."
             )
-        pkg = await generate_structured_content(
+        pkg, usage = await generate_structured_with_usage(
             self.settings,
             prompt=prompt,
             response_schema=GeneratedPostPackage,
             temperature=0.55,
         )
+        record_ai_usage(db, account_id=account.id, feature="generate_post", usage=usage)
 
         ranked = await self.hashtag_engine.enrich_and_rank_candidates(
             db, account, pkg.hashtags, desired_count=include_hashtags_count
         )
+        await db.commit()
 
         return {
             "recommended_caption": pkg.recommended_caption,
@@ -259,6 +267,7 @@ class AICopilotService:
             "hashtag_strategy_note": pkg.hashtag_strategy_note,
             "meta_weekly_quota_used": ranked["meta_weekly_quota_used"],
             "meta_weekly_quota_limit": ranked["meta_weekly_quota_limit"],
+            "token_usage": usage,
             "recommended_slot": (
                 {
                     "scheduled_for": best_slot.scheduled_for_utc.isoformat(),
@@ -497,13 +506,14 @@ class AICopilotService:
             f"Context JSON: {json.dumps(context)}\n"
             f"Latest User Message: {user_message}"
         )
-        action = await generate_structured_content(
+        action, chat_usage = await generate_structured_with_usage(
             self.settings,
             prompt=prompt,
             response_schema=CopilotChatAction,
             temperature=0.4,
             media_parts=media_parts or None,
         )
+        record_ai_usage(db, account_id=account.id, feature="copilot_chat", usage=chat_usage)
 
         structured_payload: dict[str, Any] = {}
         effective_media_urls = attached_urls or (
@@ -669,6 +679,8 @@ class AICopilotService:
                     "published_permalink": post_row.published_permalink,
                     "last_error": post_row.last_error,
                 }
+
+        structured_payload["token_usage"] = chat_usage
 
         assistant_msg = CopilotMessage(
             account_id=account.id,

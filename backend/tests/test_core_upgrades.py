@@ -589,3 +589,34 @@ async def test_overview_computes_discovery_funnel_story_and_format_multiplier(
     assert overview["top_posts"][0]["format_multiplier"] is not None
 
 
+@pytest.mark.asyncio
+async def test_extract_usage_and_record_ai_usage(db_session) -> None:
+    from types import SimpleNamespace
+    from app.models.entities import AIUsageLog
+    from app.services.gemini_helper import _extract_usage, record_ai_usage
+
+    fake_resp = SimpleNamespace(
+        usage_metadata=SimpleNamespace(
+            prompt_token_count=315,
+            candidates_token_count=85,
+            thoughts_token_count=12,
+            total_token_count=412,
+        )
+    )
+    usage = _extract_usage(fake_resp, "gemini-3.5-flash-lite")
+    assert usage["model"] == "gemini-3.5-flash-lite"
+    assert usage["prompt_tokens"] == 315
+    assert usage["output_tokens"] == 85
+    assert usage["thoughts_tokens"] == 12
+    assert usage["total_tokens"] == 412
+
+    record_ai_usage(db_session, account_id=None, feature="copilot_chat", usage=usage)
+    await db_session.commit()
+
+    rows = (await db_session.execute(select(AIUsageLog))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].feature == "copilot_chat"
+    assert rows[0].total_tokens == 412
+
+
+

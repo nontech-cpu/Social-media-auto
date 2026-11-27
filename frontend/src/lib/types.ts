@@ -247,6 +247,41 @@ export interface HashtagItem {
   rankability_fit_ratio?: number | null;
 }
 
+export interface TokenUsage {
+  model: string;
+  prompt_tokens: number;
+  output_tokens: number;
+  thoughts_tokens?: number;
+  total_tokens: number;
+}
+
+export interface AIUsageSummary {
+  account_id: string;
+  request_count: number;
+  prompt_tokens: number;
+  output_tokens: number;
+  thoughts_tokens: number;
+  total_tokens: number;
+  by_feature: Record<
+    string,
+    {
+      requests: number;
+      prompt_tokens: number;
+      output_tokens: number;
+      total_tokens: number;
+    }
+  >;
+  recent_logs: Array<{
+    id: string;
+    feature: string;
+    model: string;
+    prompt_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+    created_at: string;
+  }>;
+}
+
 export interface GeneratedPostPackage {
   recommended_caption: string;
   variants: Array<{
@@ -267,6 +302,7 @@ export interface GeneratedPostPackage {
     confidence: number;
     rationale: string;
   } | null;
+  token_usage?: TokenUsage;
 }
 
 export interface ScheduledPost {
@@ -332,6 +368,7 @@ export interface CopilotMessage {
       published_permalink?: string;
       last_error?: string;
     };
+    token_usage?: TokenUsage;
   } | null;
   created_at: string;
 }

@@ -46,7 +46,7 @@ async def test_health_and_brand_routes_smoke(db_session_factory) -> None:
             assert get_res.json()["brand"]["niche"] == "AI SaaS Tools"
 
             from datetime import datetime, timezone
-            from app.models.entities import InstagramAccount, ScheduledPost
+            from app.models.entities import AIUsageLog, InstagramAccount, ScheduledPost
 
             async with db_session_factory() as db:
                 acc = InstagramAccount(
@@ -70,6 +70,17 @@ async def test_health_and_brand_routes_smoke(db_session_factory) -> None:
                         status="PUBLISHED",
                     )
                 )
+                db.add(
+                    AIUsageLog(
+                        account_id=acc.id,
+                        feature="copilot_chat",
+                        model="gemini-3.5-flash-lite",
+                        prompt_tokens=420,
+                        output_tokens=110,
+                        thoughts_tokens=0,
+                        total_tokens=530,
+                    )
+                )
                 await db.commit()
                 acc_id = acc.id
 
@@ -79,5 +90,15 @@ async def test_health_and_brand_routes_smoke(db_session_factory) -> None:
             assert len(events) == 1
             assert events[0]["status"] == "PUBLISHED"
             assert events[0]["media_type"] == "STORIES"
+
+            usage_res = await client.get(f"/api/ai/{acc_id}/usage")
+            assert usage_res.status_code == 200
+            usage_json = usage_res.json()
+            assert usage_json["request_count"] == 1
+            assert usage_json["prompt_tokens"] == 420
+            assert usage_json["output_tokens"] == 110
+            assert usage_json["total_tokens"] == 530
+            assert usage_json["by_feature"]["copilot_chat"]["requests"] == 1
+            assert len(usage_json["recent_logs"]) == 1
     finally:
         app.dependency_overrides.clear()

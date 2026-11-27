@@ -1,4 +1,5 @@
 import type {
+  AIUsageSummary,
   AnalyticsOverview,
   BrandProfile,
   CopilotMessage,
@@ -164,6 +165,8 @@ export const api = {
 
   getChatHistory: (accountId: string) =>
     apiRequest<{ messages: CopilotMessage[] }>(`/api/ai/${accountId}/chat`),
+  getAiUsage: (accountId: string) =>
+    apiRequest<AIUsageSummary>(`/api/ai/${accountId}/usage`),
   sendChatMessage: (
     accountId: string,
     message: string,

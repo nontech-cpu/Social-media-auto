@@ -278,3 +278,19 @@ class StoryItem(Base):
     taps_back: Mapped[int] = mapped_column(Integer, default=0)
     completion_rate: Mapped[float] = mapped_column(Float, default=0.0)
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class AIUsageLog(Base):
+    __tablename__ = "ai_usage_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("instagram_accounts.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    feature: Mapped[str] = mapped_column(String(48), index=True)
+    model: Mapped[str] = mapped_column(String(80), default="")
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    thoughts_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)

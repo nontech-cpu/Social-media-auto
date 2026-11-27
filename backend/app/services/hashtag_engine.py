@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings, get_settings
 from app.core.security import TokenCipher
 from app.models.entities import BrandProfile, HashtagCache, InstagramAccount, MediaItem
-from app.services.gemini_helper import generate_structured_content
+from app.services.gemini_helper import generate_structured_with_usage, record_ai_usage
 from app.services.meta_client import MetaAPIError, MetaGraphClient
 
 META_HASHTAG_WEEKLY_QUOTA = 30
@@ -333,18 +333,21 @@ class HashtagEngine:
             "Every hashtag must start with # and contain no spaces."
         )
 
-        parsed = await generate_structured_content(
+        parsed, usage = await generate_structured_with_usage(
             self.settings,
             prompt=prompt,
             response_schema=HashtagDiscoveryResult,
             temperature=0.4,
             use_search_grounding=True,
         )
+        record_ai_usage(db, account_id=account.id, feature="hashtags", usage=usage)
 
         ranked = await self.enrich_and_rank_candidates(
             db, account, parsed.hashtags, desired_count=desired_count, hist_stats=hist_stats
         )
+        await db.commit()
         return {
             **ranked,
             "strategy_note": parsed.strategy_note,
+            "token_usage": usage,
         }

@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.database import get_db
-from app.models.entities import BrandProfile, CopilotMessage, InstagramAccount
+from app.models.entities import AIUsageLog, BrandProfile, CopilotMessage, InstagramAccount
 from app.services.ai_copilot import AICopilotService
 from app.services.hashtag_engine import HashtagEngine
 from app.services.queue_planner import recommend_slots_for_batch
@@ -218,3 +218,52 @@ async def send_copilot_message(
         raise HTTPException(status_code=502, detail=f"Gemini API error: {exc}") from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"AI generation error: {exc}") from exc
+
+
+@router.get("/{account_id}/usage")
+async def get_ai_token_usage(
+    account_id: str, db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Return real Gemini token usage summary and recent request breakdown for an account."""
+    account, _ = await _load_account_and_brand(db, account_id)
+    rows = (
+        await db.execute(
+            select(AIUsageLog)
+            .where(AIUsageLog.account_id == account.id)
+            .order_by(AIUsageLog.created_at.desc())
+            .limit(200)
+        )
+    ).scalars().all()
+
+    by_feature: dict[str, dict[str, int]] = {}
+    for row in rows:
+        bucket = by_feature.setdefault(
+            row.feature,
+            {"requests": 0, "prompt_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+        )
+        bucket["requests"] += 1
+        bucket["prompt_tokens"] += row.prompt_tokens
+        bucket["output_tokens"] += row.output_tokens
+        bucket["total_tokens"] += row.total_tokens
+
+    return {
+        "account_id": account.id,
+        "request_count": len(rows),
+        "prompt_tokens": sum(r.prompt_tokens for r in rows),
+        "output_tokens": sum(r.output_tokens for r in rows),
+        "thoughts_tokens": sum(r.thoughts_tokens for r in rows),
+        "total_tokens": sum(r.total_tokens for r in rows),
+        "by_feature": by_feature,
+        "recent_logs": [
+            {
+                "id": r.id,
+                "feature": r.feature,
+                "model": r.model,
+                "prompt_tokens": r.prompt_tokens,
+                "output_tokens": r.output_tokens,
+                "total_tokens": r.total_tokens,
+                "created_at": r.created_at.isoformat(),
+            }
+            for r in rows[:15]
+        ],
+    }
