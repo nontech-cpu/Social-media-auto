@@ -27,7 +27,7 @@ interface PostComposerModalProps {
     post?: ScheduledPost;
     caption?: string;
     hashtags?: string[];
-    mediaType?: "IMAGE" | "REELS" | "CAROUSEL";
+    mediaType?: "IMAGE" | "REELS" | "CAROUSEL" | "STORIES";
     mediaUrls?: string[];
     scheduledFor?: string;
   } | null;
@@ -52,11 +52,12 @@ export function PostComposerModal({
 }: PostComposerModalProps) {
   const editingPost = initialDraft?.post || null;
 
-  const [mediaType, setMediaType] = useState<"IMAGE" | "REELS" | "CAROUSEL">("REELS");
+  const [mediaType, setMediaType] = useState<"IMAGE" | "REELS" | "CAROUSEL" | "STORIES">("REELS");
   const [mediaUrls, setMediaUrls] = useState<string[]>([]);
   const [nonHttpsWarning, setNonHttpsWarning] = useState(false);
   const [mediaWarnings, setMediaWarnings] = useState<string[]>([]);
   const [topic, setTopic] = useState("");
+  const [toneOverride, setToneOverride] = useState("");
   const [caption, setCaption] = useState("");
   const [hashtags, setHashtags] = useState<string[]>([]);
   const [customTagInput, setCustomTagInput] = useState("");
@@ -89,6 +90,7 @@ export function PostComposerModal({
       setTimingMode(initialDraft?.scheduledFor ? "custom" : "best");
       setCustomDatetime(toDatetimeLocalValue(initialDraft?.scheduledFor));
       setTopic("");
+      setToneOverride("");
     }
   }, [open, editingPost, initialDraft]);
 
@@ -106,24 +108,32 @@ export function PostComposerModal({
       let anyNonHttps = false;
 
       for (const file of fileArray) {
-        const res = await api.uploadMedia(file);
+        const res = await api.uploadMedia(
+          file,
+          mediaType === "STORIES" ? "STORIES" : undefined
+        );
         uploadedUrls.push(res.url);
         if (!res.is_public_https) anyNonHttps = true;
         if (res.warnings?.length) {
           collectedWarnings.push(...res.warnings);
         }
-        if (fileArray.length === 1) {
+        if (mediaType !== "STORIES" && fileArray.length === 1) {
           detectedType = res.media_type;
         }
       }
       setNonHttpsWarning(anyNonHttps);
       setMediaWarnings(collectedWarnings);
-      const merged = [...mediaUrls, ...uploadedUrls].slice(0, 10);
+      const merged =
+        mediaType === "STORIES"
+          ? uploadedUrls.slice(0, 1)
+          : [...mediaUrls, ...uploadedUrls].slice(0, 10);
       setMediaUrls(merged);
-      if (merged.length > 1) {
-        setMediaType("CAROUSEL");
-      } else {
-        setMediaType(detectedType);
+      if (mediaType !== "STORIES") {
+        if (merged.length > 1) {
+          setMediaType("CAROUSEL");
+        } else {
+          setMediaType(detectedType);
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed.");
@@ -159,7 +169,8 @@ export function PostComposerModal({
       const pkg = await api.generatePostPackage(account.id, {
         topic: topic.trim(),
         media_type: mediaType,
-        hashtags_count: 15,
+        tone_override: toneOverride.trim(),
+        hashtags_count: mediaType === "STORIES" ? 3 : 15,
       });
       setAiPackage(pkg);
       setCaption(pkg.recommended_caption);
@@ -296,26 +307,63 @@ export function PostComposerModal({
               </div>
             )}
 
+            {/* Top Mode Tabs: Post / Reel vs Instagram Story (24h) */}
+            {!editingPost && (
+              <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/10 bg-black/40 p-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (mediaType === "STORIES") setMediaType("REELS");
+                  }}
+                  className={`rounded-xl px-3 py-2 text-xs font-semibold transition ${
+                    mediaType !== "STORIES"
+                      ? "bg-emerald-500 text-slate-950 shadow-sm"
+                      : "text-slate-300 hover:bg-white/5 hover:text-white"
+                  }`}
+                >
+                  Feed Post / Reel / Carousel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMediaType("STORIES");
+                    if (mediaUrls.length > 1) setMediaUrls(mediaUrls.slice(0, 1));
+                  }}
+                  className={`rounded-xl px-3 py-2 text-xs font-semibold transition ${
+                    mediaType === "STORIES"
+                      ? "bg-gradient-to-r from-amber-400 via-pink-500 to-purple-500 text-white shadow-sm"
+                      : "text-slate-300 hover:bg-white/5 hover:text-white"
+                  }`}
+                >
+                  Instagram Story (24h)
+                </button>
+              </div>
+            )}
+
             {/* Format + Upload */}
             <div className="space-y-3 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-white">1. Media &amp; Format</span>
-                <div className="flex gap-1 rounded-xl border border-white/10 bg-black/40 p-1">
-                  {(["REELS", "IMAGE", "CAROUSEL"] as const).map((fmt) => (
-                    <button
-                      key={fmt}
-                      type="button"
-                      onClick={() => setMediaType(fmt)}
-                      className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition ${
-                        mediaType === fmt
-                          ? "bg-emerald-500 text-slate-950"
-                          : "text-slate-400 hover:text-white"
-                      }`}
-                    >
-                      {fmt}
-                    </button>
-                  ))}
-                </div>
+                <span className="text-xs font-semibold text-white">
+                  1. {mediaType === "STORIES" ? "Story Visual (9:16 Photo or Video ≤ 60s)" : "Media & Format"}
+                </span>
+                {mediaType !== "STORIES" && (
+                  <div className="flex gap-1 rounded-xl border border-white/10 bg-black/40 p-1">
+                    {(["REELS", "IMAGE", "CAROUSEL"] as const).map((fmt) => (
+                      <button
+                        key={fmt}
+                        type="button"
+                        onClick={() => setMediaType(fmt)}
+                        className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition ${
+                          mediaType === fmt
+                            ? "bg-emerald-500 text-slate-950"
+                            : "text-slate-400 hover:text-white"
+                        }`}
+                      >
+                        {fmt}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-white/20 bg-black/30 px-4 py-4 text-xs text-slate-300 transition hover:border-emerald-400/60">
@@ -362,13 +410,19 @@ export function PostComposerModal({
             {/* AI Prompt */}
             <div className="space-y-3 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
               <span className="text-xs font-semibold text-white">
-                2. AI Caption &amp; Trending Reach Hashtags
+                {mediaType === "STORIES"
+                  ? "2. AI Story Concept, On-Screen Text & Sticker Ideas (Any Style)"
+                  : "2. AI Caption & Trending Reach Hashtags"}
               </span>
               <div className="flex flex-col gap-2 sm:flex-row">
                 <input
                   value={topic}
                   onChange={(e) => setTopic(e.target.value)}
-                  placeholder="Describe your Reel/Post (e.g., 3 AI workflows for small businesses)"
+                  placeholder={
+                    mediaType === "STORIES"
+                      ? "Describe your Story idea (e.g., behind-the-scenes product launch poll)"
+                      : "Describe your Reel/Post (e.g., 3 AI workflows for small businesses)"
+                  }
                   className="flex-1 rounded-xl border border-white/15 bg-black/40 px-3.5 py-2 text-xs text-white placeholder-slate-500 outline-none focus:border-emerald-400"
                 />
                 <button
@@ -382,9 +436,19 @@ export function PostComposerModal({
                   ) : (
                     <Sparkles className="h-3.5 w-3.5" />
                   )}
-                  Generate AI Copy
+                  {mediaType === "STORIES" ? "Generate Story Ideas" : "Generate AI Copy"}
                 </button>
               </div>
+              <input
+                value={toneOverride}
+                onChange={(e) => setToneOverride(e.target.value)}
+                placeholder={
+                  mediaType === "STORIES"
+                    ? "Custom style/vibe (optional: minimal quote, flash sale urgency, casual Hinglish poll...)"
+                    : "Custom style/tone (optional: storytelling, bold founder take, Hinglish, educational...)"
+                }
+                className="w-full rounded-xl border border-white/10 bg-black/30 px-3.5 py-1.5 text-[11px] text-slate-200 placeholder-slate-500 outline-none focus:border-indigo-400"
+              />
 
               {aiPackage && aiPackage.variants.length > 0 && (
                 <div className="flex flex-wrap gap-2 pt-1">
@@ -404,12 +468,20 @@ export function PostComposerModal({
               )}
 
               <div>
-                <label className="text-[11px] text-slate-400">Editable Caption</label>
+                <label className="text-[11px] text-slate-400">
+                  {mediaType === "STORIES"
+                    ? "On-Screen Story Text / Sticker Plan (previewed live — Meta publishes the Story image/video directly)"
+                    : "Editable Caption"}
+                </label>
                 <textarea
-                  rows={5}
+                  rows={mediaType === "STORIES" ? 4 : 5}
                   value={caption}
                   onChange={(e) => setCaption(e.target.value)}
-                  placeholder="Write or refine your caption..."
+                  placeholder={
+                    mediaType === "STORIES"
+                      ? "Write on-screen text or interactive poll/question sticker ideas for your Story..."
+                      : "Write or refine your caption..."
+                  }
                   className="mt-1 w-full rounded-xl border border-white/15 bg-black/40 p-3 text-xs leading-relaxed text-white outline-none focus:border-emerald-400"
                 />
               </div>

@@ -5,7 +5,7 @@ import { Bookmark, Heart, MessageCircle, Play, Send, Sparkles } from "lucide-rea
 interface InstagramPreviewProps {
   username: string;
   avatarUrl?: string;
-  mediaType: "IMAGE" | "REELS" | "CAROUSEL";
+  mediaType: "IMAGE" | "REELS" | "CAROUSEL" | "STORIES";
   mediaUrls: string[];
   caption: string;
   hashtags: string[];
@@ -23,13 +23,83 @@ export function InstagramPreview({
 }: InstagramPreviewProps) {
   const firstUrl = mediaUrls[0] || "";
   const isVideo =
-    mediaType === "REELS" ||
     firstUrl.toLowerCase().split("?")[0].endsWith(".mp4") ||
-    firstUrl.toLowerCase().split("?")[0].endsWith(".mov");
+    firstUrl.toLowerCase().split("?")[0].endsWith(".mov") ||
+    (mediaType === "REELS" && !firstUrl.toLowerCase().split("?")[0].endsWith(".jpg"));
 
   const fullTags = hashtags
     .map((h) => (h.startsWith("#") ? h : `#${h}`))
     .join(" ");
+
+  if (mediaType === "STORIES") {
+    return (
+      <div className="mx-auto w-full max-w-[300px] overflow-hidden rounded-[32px] border border-white/15 bg-black shadow-2xl">
+        <div className="relative aspect-[9/16] bg-slate-950">
+          {/* Top Story Progress Bar & Profile */}
+          <div className="absolute inset-x-0 top-0 z-10 bg-gradient-to-b from-black/75 to-transparent p-3.5">
+            <div className="mb-2.5 flex gap-1">
+              <span className="h-0.5 flex-1 rounded-full bg-white/90" />
+              <span className="h-0.5 flex-1 rounded-full bg-white/30" />
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <div className="h-7 w-7 overflow-hidden rounded-full border border-white/40 bg-slate-900">
+                  {avatarUrl ? (
+                    <img src={avatarUrl} alt={username} className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-[10px] font-bold text-white">
+                      {username.slice(0, 2).toUpperCase()}
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold text-white">@{username || "your_brand"}</p>
+                  <p className="text-[9px] text-slate-300">Story (24h)</p>
+                </div>
+              </div>
+              {scheduledLabel && (
+                <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[9px] font-medium text-emerald-200">
+                  {scheduledLabel}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {firstUrl ? (
+            isVideo ? (
+              <video src={firstUrl} controls muted className="h-full w-full object-cover" />
+            ) : (
+              <img src={firstUrl} alt="Story media preview" className="h-full w-full object-cover" />
+            )
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-slate-500">
+              <Play className="h-8 w-8 opacity-40" />
+              <p className="text-xs">Upload a vertical 9:16 photo or video (max 60s) for your Story</p>
+            </div>
+          )}
+
+          {caption && (
+            <div className="absolute inset-x-3 bottom-14 z-10 rounded-xl border border-white/15 bg-black/65 p-2.5 backdrop-blur-md">
+              <p className="text-[9px] font-semibold uppercase tracking-wider text-emerald-300">
+                Overlay / Sticker Concept
+              </p>
+              <p className="mt-0.5 max-h-24 overflow-y-auto whitespace-pre-wrap text-[11px] text-white">
+                {caption}
+              </p>
+            </div>
+          )}
+
+          <div className="absolute inset-x-0 bottom-0 z-10 flex items-center gap-2 bg-gradient-to-t from-black/80 to-transparent px-3.5 py-3">
+            <div className="flex-1 rounded-full border border-white/25 px-3 py-1.5 text-[10px] text-slate-300">
+              Send message...
+            </div>
+            <Heart className="h-4 w-4 text-white/80" />
+            <Send className="h-4 w-4 text-white/80" />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto w-full max-w-[330px] overflow-hidden rounded-[28px] border border-white/15 bg-[#0b0e16] shadow-2xl">

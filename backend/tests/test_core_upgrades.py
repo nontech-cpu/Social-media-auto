@@ -9,15 +9,18 @@ import respx
 from sqlalchemy import select
 
 from app.models.entities import (
+    AudienceSnapshot,
     CopilotMessage,
     HashtagCache,
     InstagramAccount,
     MediaItem,
     ScheduledPost,
+    StoryItem,
 )
 from app.services.analytics_engine import (
     _compute_period_trend,
     _weighted_engagement_rate,
+    build_analytics_overview,
     compute_content_dna,
 )
 from app.services.hashtag_engine import (
@@ -448,4 +451,141 @@ async def test_fetch_media_insights_fallback_preserves_shares(test_settings) -> 
         ]
         metrics = await client.fetch_media_insights("media_123", "FEED", "tok")
         assert metrics == {"reach": 1200, "saved": 18, "shares": 11}
+
+
+def test_story_media_spec_validation(test_settings) -> None:
+    # Ideal 9:16 vertical photo Story has zero warnings
+    assert (
+        validate_instagram_media_specs(
+            media_type="IMAGE",
+            size_bytes=500_000,
+            width=1080,
+            height=1920,
+            duration_seconds=None,
+            settings=test_settings,
+            target_format="STORIES",
+        )
+        == []
+    )
+
+    # Wide horizontal image triggers gentle Story 9:16 warning
+    warns = validate_instagram_media_specs(
+        media_type="IMAGE",
+        size_bytes=500_000,
+        width=1600,
+        height=900,
+        duration_seconds=None,
+        settings=test_settings,
+        target_format="STORIES",
+    )
+    assert len(warns) == 1
+    assert "9:16" in warns[0]
+
+    # Story video longer than 60s raises ValueError
+    with pytest.raises(ValueError, match="Video Story"):
+        validate_instagram_media_specs(
+            media_type="REELS",
+            size_bytes=5_000_000,
+            width=1080,
+            height=1920,
+            duration_seconds=75.0,
+            settings=test_settings,
+            target_format="STORIES",
+            is_video=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_meta_story_container_creation_omits_caption(test_settings) -> None:
+    client = MetaGraphClient(test_settings)
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.post("https://graph.facebook.com/v21.0/178414009999/media").mock(
+            return_value=httpx.Response(200, json={"id": "story_container_1"})
+        )
+        cid = await client.create_media_container(
+            "178414009999",
+            "tok",
+            media_type="STORIES",
+            media_urls=["https://res.cloudinary.com/demo/image/upload/story.jpg"],
+            caption="Ignored on Meta API",
+        )
+        assert cid == "story_container_1"
+        body_text = route.calls[0].request.content.decode("utf-8")
+        assert "media_type=STORIES" in body_text
+        assert "image_url=" in body_text
+        assert "caption=" not in body_text
+
+
+@pytest.mark.asyncio
+async def test_overview_computes_discovery_funnel_story_and_format_multiplier(
+    db_session, cipher
+) -> None:
+    account = InstagramAccount(
+        ig_user_id="178414005555",
+        username="story_creator",
+        followers_count=100,
+        timezone="UTC",
+        encrypted_access_token=cipher.encrypt("tok"),
+    )
+    db_session.add(account)
+    await db_session.flush()
+
+    now = datetime.now(timezone.utc)
+    db_session.add_all(
+        [
+            MediaItem(
+                account_id=account.id,
+                ig_media_id="r1",
+                media_type="REELS",
+                caption="Reel 1",
+                published_at=now - timedelta(days=2),
+                reach=1000,
+                likes=60,
+                comments=5,
+                saves=20,
+                shares=10,
+                engagement_rate=9.5,
+            ),
+            MediaItem(
+                account_id=account.id,
+                ig_media_id="r2",
+                media_type="REELS",
+                caption="Reel 2",
+                published_at=now - timedelta(days=5),
+                reach=500,
+                likes=20,
+                comments=2,
+                saves=5,
+                shares=5,
+                engagement_rate=6.4,
+            ),
+            AudienceSnapshot(
+                account_id=account.id,
+                reach_day=800,
+                profile_views_day=40,
+                follower_count=100,
+            ),
+            StoryItem(
+                account_id=account.id,
+                ig_media_id="st_1",
+                media_type="IMAGE",
+                published_at=now - timedelta(hours=3),
+                reach=200,
+                views=240,
+                replies=6,
+                exits=20,
+                completion_rate=90.0,
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    overview = await build_analytics_overview(db_session, account)
+    assert overview["discovery_metrics"]["discovery_multiplier"] == 7.5
+    assert overview["discovery_metrics"]["posts_last_30d"] == 2
+    assert overview["profile_funnel"]["profile_visit_rate_pct"] == 5.0
+    assert overview["story_analytics"]["stories_tracked"] == 1
+    assert overview["story_analytics"]["avg_completion_rate_pct"] == 90.0
+    assert overview["top_posts"][0]["format_multiplier"] is not None
+
 

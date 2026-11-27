@@ -466,26 +466,25 @@ def run_7stage_recommendation(
 
         if s_type == "proven":
             reason = (
-                f"{DAY_NAMES[d]} at {time_lbl} is a proven strong time for your account — "
-                f"{direct_counts[d][h]} past post(s) here got {abs(lift_pct):.0f}% "
-                f"{'higher' if lift_pct >= 0 else 'lower'} engagement than average, "
-                f"spaced {min_gap_hours}h from nearby posts."
+                f"Your followers love {DAY_NAMES[d]} at {time_lbl} — your past {direct_counts[d][h]} post(s) "
+                f"here got {abs(lift_pct):.0f}% {'higher' if lift_pct >= 0 else 'lower'} engagement than usual, "
+                f"leaving a healthy {min_gap_hours}h breathing room between posts."
             )
         elif s_type == "benchmark":
             if "follower_online" in resolved_prior_source:
                 reason = (
-                    f"{DAY_NAMES[d]} at {time_lbl} lands right before your followers' busiest online "
-                    f"hours (+{abs(lift_pct):.0f}% expected boost), spaced {min_gap_hours}h apart."
+                    f"{DAY_NAMES[d]} at {time_lbl} catches your followers right as they come online "
+                    f"(~{abs(lift_pct):.0f}% higher reach expected), keeping a {min_gap_hours}h gap between posts."
                 )
             else:
                 reason = (
-                    f"{DAY_NAMES[d]} at {time_lbl} is a peak activity window for audiences in your niche "
-                    f"(+{abs(lift_pct):.0f}% expected engagement), spaced {min_gap_hours}h from nearby posts."
+                    f"Your audience is usually most active around {DAY_NAMES[d]} at {time_lbl} "
+                    f"(~{abs(lift_pct):.0f}% more engagement expected), leaving a healthy {min_gap_hours}h gap between posts."
                 )
         else:
             reason = (
-                f"{DAY_NAMES[d]} at {time_lbl} is a smart test slot to uncover new high-reach hours "
-                f"for your account, safely spaced {min_gap_hours}h from nearby posts."
+                f"Great fresh slot to try on {DAY_NAMES[d]} at {time_lbl} — helps uncover new reach pockets "
+                f"for your account while keeping {min_gap_hours}h between posts."
             )
 
         selected.append(
@@ -529,9 +528,9 @@ def run_7stage_recommendation(
             "lift_vs_baseline": c["lift_vs_baseline"],
             "sample_size": c["sample_size"],
             "reason": (
-                f"{c['sample_size']} past post(s) at this hour got {abs(c['lift_vs_baseline']):.0f}% lower engagement than average — better to skip."
+                f"Your past {c['sample_size']} post(s) here got {abs(c['lift_vs_baseline']):.0f}% lower engagement than usual — better to post at another time."
                 if c["sample_size"] > 0
-                else f"Quiet audience hours (~{abs(c['lift_vs_baseline']):.0f}% below normal activity) — better to post later."
+                else f"Very quiet hours (~{abs(c['lift_vs_baseline']):.0f}% less audience activity than normal) — posts here usually get missed."
             ),
         }
         for c in avoid_candidates[:5]

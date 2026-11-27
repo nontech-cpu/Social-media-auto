@@ -74,7 +74,7 @@ class CopilotChatAction(BaseModel):
     proposed_hashtags: list[str] = Field(
         description="8-12 reach-boosting lowercase #hashtags relevant to the post/topic, or empty list if purely conversational"
     )
-    proposed_media_type: str = Field(description="REELS | IMAGE | CAROUSEL")
+    proposed_media_type: str = Field(description="REELS | IMAGE | CAROUSEL | STORIES")
     should_recommend_best_slot: bool = Field(
         description="True if user wants posting time recommendation or scheduling, else false"
     )
@@ -207,23 +207,39 @@ class AICopilotService:
         content_dna = overview.get("content_dna") or {}
         today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-        prompt = (
-            f"Today is {today_str}. Write 3 high-retention Instagram {media_type} caption options AND "
-            f"recommend {include_hashtags_count} reach-maximizing hashtags (trending + niche + branded; "
-            "avoid banned/spam tags like #love #instagood #fyp).\n"
-            f"Topic/Media Description: {topic}\n"
-            f"Brand Name: {brand.brand_name if brand else account.name}\n"
-            f"Niche: {brand.niche if brand else account.biography}\n"
-            f"Tone: {tone_override or (brand.tone_of_voice if brand else 'Authentic & engaging')}\n"
-            f"Language: {brand.language if brand else 'English'}\n"
-            f"Examples of this account's past top-reach captions: {top_caption_examples}\n"
-            f"Account's historically top-reach hashtags: {top_historical_tags}\n"
-            f"Account Content DNA (historical length/hook/hashtag lift): {json.dumps(content_dna)}\n\n"
-            "Rules:\n"
-            "- First line must be a scroll-stopping hook (no generic 'In today's post').\n"
-            "- Include value-packed body + clear save/share/comment CTA.\n"
-            "- Do NOT append hashtags inside `caption_body` or `recommended_caption` (hashtags go in `hashtags`)."
-        )
+        if media_type == "STORIES":
+            prompt = (
+                f"Today is {today_str}. Craft 3 completely distinct, customizable Instagram Story creative concepts "
+                "(on-screen hook text + visual layout direction + interactive sticker/poll/CTA idea) tailored strictly to the user's style and request below.\n"
+                "Do NOT repeat one fixed template — match whatever mood, aesthetic, or custom style the user describes.\n"
+                f"User Request / Story Style & Topic: {topic}\n"
+                f"Brand Name: {brand.brand_name if brand else account.name}\n"
+                f"Niche: {brand.niche if brand else account.biography}\n"
+                f"Tone / Style Override: {tone_override or (brand.tone_of_voice if brand else 'Authentic & engaging')}\n"
+                f"Language: {brand.language if brand else 'English'}\n"
+                f"Account Content DNA: {json.dumps(content_dna)}\n\n"
+                "Rules:\n"
+                "- Put the ready-to-use on-screen Story text + sticker/CTA suggestion inside `caption_body` and `recommended_caption` (note: Meta Stories API publishes the media image/video itself, so keep text punchy for screen overlay).\n"
+                f"- Include up to {min(include_hashtags_count, 5)} light niche hashtags if useful (or 0-3 subtle tags)."
+            )
+        else:
+            prompt = (
+                f"Today is {today_str}. Write 3 high-retention Instagram {media_type} caption options AND "
+                f"recommend {include_hashtags_count} reach-maximizing hashtags (trending + niche + branded; "
+                "avoid banned/spam tags like #love #instagood #fyp).\n"
+                f"Topic/Media Description: {topic}\n"
+                f"Brand Name: {brand.brand_name if brand else account.name}\n"
+                f"Niche: {brand.niche if brand else account.biography}\n"
+                f"Tone: {tone_override or (brand.tone_of_voice if brand else 'Authentic & engaging')}\n"
+                f"Language: {brand.language if brand else 'English'}\n"
+                f"Examples of this account's past top-reach captions: {top_caption_examples}\n"
+                f"Account's historically top-reach hashtags: {top_historical_tags}\n"
+                f"Account Content DNA (historical length/hook/hashtag lift): {json.dumps(content_dna)}\n\n"
+                "Rules:\n"
+                "- First line must be a scroll-stopping hook (no generic 'In today's post').\n"
+                "- Include value-packed body + clear save/share/comment CTA.\n"
+                "- Do NOT append hashtags inside `caption_body` or `recommended_caption` (hashtags go in `hashtags`)."
+            )
         pkg = await generate_structured_content(
             self.settings,
             prompt=prompt,
@@ -474,8 +490,9 @@ class AICopilotService:
             "- If the user asks to post immediately right now (e.g. 'post now', 'abhi post kar do', 'post it now'), set `requested_action='publish_now'`.\n"
             "- If the user refers to the earlier attached photo/caption/hashtags (e.g. 'same caption and hashtag', 'schedule this', 'have u posted?'), set `use_previous_draft=true`.\n"
             "- Otherwise use `requested_action='draft'` (when creating/updating a draft) or `'chat'` (for pure questions — check `recent_posts_status`, `kpis`, `format_breakdown`, `top_posts`, `bottom_posts`, `weekly_schedule`, `avoid_windows`, `content_dna`, and `ai_audit` to answer accurately with exact numbers, and return empty `proposed_caption`/`proposed_hashtags` when `requested_action='chat'`).\n\n"
-            "DATA & TIMING RULES:\n"
-            "- If images are attached in this turn, analyze what is actually visible in the image(s) to craft a specific, relevant caption and hashtags.\n"
+            "DATA, STORY & TIMING RULES:\n"
+            "- If images are attached in this turn, analyze what is actually visible in the image(s) to craft a specific, relevant caption or Story overlay idea.\n"
+            "- If user asks to create/schedule/post an Instagram Story (in ANY custom style, vibe, poll, minimalist, bold, BTS, meme, product teaser, etc.), set `proposed_media_type='STORIES'` and adapt 100% creatively to their exact requested style (never force a single rigid Story template; suggest on-screen text/sticker ideas in `proposed_caption` and keep `proposed_hashtags` optional/minimal).\n"
             "- Recommend posting timing dynamically based on the content/format AND the account's real historical performance (`format_breakdown`, `top_windows`, `has_historical_data`) and `existing_queue`.\n"
             f"Context JSON: {json.dumps(context)}\n"
             f"Latest User Message: {user_message}"

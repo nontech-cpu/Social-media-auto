@@ -21,14 +21,14 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 
 class GeneratePostRequest(BaseModel):
     topic: str = Field(min_length=2, max_length=1500)
-    media_type: Literal["REELS", "IMAGE", "CAROUSEL"] = "REELS"
+    media_type: Literal["REELS", "IMAGE", "CAROUSEL", "STORIES"] = "REELS"
     tone_override: str = ""
-    hashtags_count: int = Field(default=15, ge=3, le=30)
+    hashtags_count: int = Field(default=15, ge=0, le=30)
 
 
 class BatchPlanItemInput(BaseModel):
     topic: str = Field(min_length=2, max_length=1500)
-    media_type: Literal["REELS", "IMAGE", "CAROUSEL"] = "REELS"
+    media_type: Literal["REELS", "IMAGE", "CAROUSEL", "STORIES"] = "REELS"
     media_urls: list[str] = Field(default_factory=list)
 
 
@@ -42,7 +42,7 @@ class PlanBatchRequest(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=3000)
     media_urls: list[str] = Field(default_factory=list, max_length=10)
-    media_type: Literal["", "REELS", "IMAGE", "CAROUSEL"] = ""
+    media_type: Literal["", "REELS", "IMAGE", "CAROUSEL", "STORIES"] = ""
 
 
 class HashtagLookupRequest(BaseModel):

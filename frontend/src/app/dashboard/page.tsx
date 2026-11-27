@@ -33,6 +33,20 @@ function formatConfidenceLabel(tier?: string): string {
   return "Learning Mode";
 }
 
+function formatCaptionBucket(bucket?: string | null): string {
+  if (bucket === "short_under_80") return "Short & Punchy (< 80 chars)";
+  if (bucket === "medium_80_220") return "Medium Story Hook (80–220 chars)";
+  if (bucket === "story_over_220") return "Deep Storytelling (220+ chars)";
+  return "Still learning";
+}
+
+function formatHashtagBucket(bucket?: string | null): string {
+  if (bucket === "0_to_5") return "Minimal (0–5 tags)";
+  if (bucket === "6_to_12") return "Balanced (6–12 tags)";
+  if (bucket === "13_plus") return "Broad Discovery (13+ tags)";
+  return "Still learning";
+}
+
 function scoreToColor(score: number): string {
   if (score <= 0) return "bg-white/[0.03] border-white/5";
   if (score >= 75) return "bg-emerald-400/80 border-emerald-300/60";
@@ -454,6 +468,246 @@ export default function DashboardPage() {
                       </span>
                     ))}
                   </div>
+                )}
+              </div>
+            </section>
+
+            {/* Content DNA + Discovery & Profile Funnel */}
+            <section className="grid gap-6 lg:grid-cols-2">
+              <div className="glass-panel rounded-2xl p-5">
+                <h2 className="flex items-center gap-2 text-sm font-semibold text-white">
+                  <Sparkles className="h-4 w-4 text-emerald-400" />
+                  Content DNA (What Works Best For You)
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  Real patterns learned from your past captions, hooks &amp; hashtag counts.
+                </p>
+                {overview.content_dna?.has_data ? (
+                  <div className="mt-4 space-y-3">
+                    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3.5">
+                      <p className="text-[11px] text-slate-400">Best Performing Caption Length</p>
+                      <p className="mt-1 text-sm font-semibold text-emerald-300">
+                        {formatCaptionBucket(overview.content_dna.best_caption_length_bucket)}
+                      </p>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3.5">
+                        <p className="text-[11px] text-slate-400">Hook Style Comparison</p>
+                        <p className="mt-1 text-xs text-slate-200">
+                          Question Hooks (?):{" "}
+                          <strong className="text-white">
+                            {overview.content_dna.question_hook_avg_reach !== null &&
+                            overview.content_dna.question_hook_avg_reach !== undefined
+                              ? `${overview.content_dna.question_hook_avg_reach} avg reach`
+                              : "Not tested yet"}
+                          </strong>
+                        </p>
+                        <p className="mt-1 text-xs text-slate-200">
+                          Direct Statements:{" "}
+                          <strong className="text-white">
+                            {overview.content_dna.statement_hook_avg_reach !== null &&
+                            overview.content_dna.statement_hook_avg_reach !== undefined
+                              ? `${overview.content_dna.statement_hook_avg_reach} avg reach`
+                              : "Not tested yet"}
+                          </strong>
+                        </p>
+                      </div>
+                      <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3.5">
+                        <p className="text-[11px] text-slate-400">Hashtag Sweet Spot</p>
+                        <p className="mt-1 text-sm font-semibold text-indigo-300">
+                          {formatHashtagBucket(overview.content_dna.best_hashtag_count_bucket)}
+                        </p>
+                        <p className="mt-1 text-[11px] text-slate-400">
+                          Drives your strongest historical reach
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-4 text-xs text-slate-400">
+                    Sync your Instagram posts to unlock your Caption &amp; Hook DNA.
+                  </p>
+                )}
+              </div>
+
+              <div className="glass-panel rounded-2xl p-5">
+                <h2 className="flex items-center gap-2 text-sm font-semibold text-white">
+                  <TrendingUp className="h-4 w-4 text-indigo-400" />
+                  Discovery, Virality &amp; Profile Funnel
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  How far your content reaches beyond followers &amp; converts to profile visits.
+                </p>
+                {overview.discovery_metrics ? (
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3.5">
+                      <p className="text-[11px] text-slate-400">Non-Follower Discovery</p>
+                      <p className="mt-1 text-xl font-bold text-emerald-300">
+                        {overview.discovery_metrics.discovery_multiplier}x
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-slate-400">
+                        Average reach compared to your follower count
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3.5">
+                      <p className="text-[11px] text-slate-400">Save vs Share Quality</p>
+                      <p className="mt-1 text-sm font-bold text-white">
+                        {overview.discovery_metrics.save_rate_pct}% saves •{" "}
+                        {overview.discovery_metrics.share_rate_pct}% shares
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-slate-400">
+                        Saves = value • Shares = word-of-mouth virality
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3.5">
+                      <p className="text-[11px] text-slate-400">30-Day Posting Consistency</p>
+                      <p className="mt-1 text-sm font-bold text-white">
+                        {overview.discovery_metrics.actual_posts_per_week} / wk{" "}
+                        <span className="text-xs font-normal text-slate-400">
+                          (Goal: {overview.discovery_metrics.goal_posts_per_week}/wk)
+                        </span>
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-slate-400">
+                        {overview.discovery_metrics.posts_last_30d} posts in last 30 days
+                        {overview.discovery_metrics.days_since_last_post !== null
+                          ? ` • Last post ${overview.discovery_metrics.days_since_last_post}d ago`
+                          : ""}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-indigo-400/20 bg-indigo-500/5 p-3.5">
+                      <p className="text-[11px] text-slate-400">Daily Profile Funnel</p>
+                      <p className="mt-1 text-sm font-bold text-indigo-200">
+                        {overview.profile_funnel?.profile_views_day || 0} profile visits
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-slate-400">
+                        From {overview.profile_funnel?.reach_day || 0} daily reach (
+                        {overview.profile_funnel?.profile_visit_rate_pct || 0}% visit rate)
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-4 text-xs text-slate-400">Sync insights to view discovery metrics.</p>
+                )}
+              </div>
+            </section>
+
+            {/* Top Winners vs Needs Improvement + Active Story Analytics */}
+            <section className="grid gap-6 lg:grid-cols-2">
+              <div className="glass-panel rounded-2xl p-5">
+                <h2 className="flex items-center gap-2 text-sm font-semibold text-white">
+                  <Activity className="h-4 w-4 text-emerald-400" />
+                  Top Winners vs Needs Improvement
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  Ranked fairly against each format&apos;s own average (Reels vs Carousels vs Photos).
+                </p>
+                {overview.top_posts.length > 0 ? (
+                  <div className="mt-4 space-y-2.5">
+                    {overview.top_posts.slice(0, 3).map((post) => (
+                      <div
+                        key={post.id}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300">
+                              WINNER {post.format_multiplier ? `• ${post.format_multiplier}x avg` : ""}
+                            </span>
+                            <span className="text-[10px] text-slate-400">{post.media_type}</span>
+                          </div>
+                          <p className="mt-1 truncate text-xs text-slate-200">
+                            {post.caption || "Instagram post"}
+                          </p>
+                        </div>
+                        <div className="text-right text-xs">
+                          <p className="font-bold text-white">{post.reach.toLocaleString()} reach</p>
+                          <p className="text-[10px] text-slate-400">
+                            {post.likes} likes • {post.saves} saves
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                    {(overview.bottom_posts || []).slice(0, 2).map((post) => (
+                      <div
+                        key={post.ig_media_id}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">
+                              IMPROVE {post.format_multiplier ? `• ${post.format_multiplier}x avg` : ""}
+                            </span>
+                            <span className="text-[10px] text-slate-400">{post.media_type}</span>
+                          </div>
+                          <p className="mt-1 truncate text-xs text-slate-200">
+                            {post.caption || "Instagram post"}
+                          </p>
+                        </div>
+                        <div className="text-right text-xs">
+                          <p className="font-bold text-white">{post.reach.toLocaleString()} reach</p>
+                          <p className="text-[10px] text-slate-400">{post.engagement_rate}% ER</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-4 text-xs text-slate-400">
+                    Sync posts to compare your winners vs underperformers.
+                  </p>
+                )}
+              </div>
+
+              <div className="glass-panel rounded-2xl p-5">
+                <h2 className="flex items-center gap-2 text-sm font-semibold text-white">
+                  <Eye className="h-4 w-4 text-pink-400" />
+                  Story Performance (24h Capture)
+                </h2>
+                <p className="mt-0.5 text-xs text-slate-400">
+                  Live Stories expire in 24h on Instagram — Sync captures reach, replies &amp; completion rate.
+                </p>
+                {overview.story_analytics && overview.story_analytics.stories_tracked > 0 ? (
+                  <div className="mt-4 space-y-3">
+                    <div className="grid grid-cols-3 gap-2.5">
+                      <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                        <p className="text-[10px] text-slate-400">Avg Story Reach</p>
+                        <p className="mt-1 text-base font-bold text-white">
+                          {overview.story_analytics.avg_story_reach}
+                        </p>
+                      </div>
+                      <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                        <p className="text-[10px] text-slate-400">Completion Rate</p>
+                        <p className="mt-1 text-base font-bold text-emerald-300">
+                          {overview.story_analytics.avg_completion_rate_pct}%
+                        </p>
+                      </div>
+                      <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+                        <p className="text-[10px] text-slate-400">Total Replies</p>
+                        <p className="mt-1 text-base font-bold text-indigo-300">
+                          {overview.story_analytics.total_story_replies}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      {overview.story_analytics.recent_stories.slice(0, 3).map((st) => (
+                        <div
+                          key={st.ig_media_id}
+                          className="flex items-center justify-between rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-xs"
+                        >
+                          <span className="font-medium text-slate-200">
+                            {st.media_type} Story • {new Date(st.published_at).toLocaleDateString()}
+                          </span>
+                          <span className="text-slate-300">
+                            {st.reach} reach • {st.completion_rate}% watched • {st.replies} replies
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-4 rounded-xl border border-white/10 bg-black/25 p-4 text-xs text-slate-400">
+                    No active 24h Stories synced yet. Publish a Story from Smart Planner and click{" "}
+                    <strong className="text-white">Sync IG Insights</strong> within 24 hours to capture its reach, replies &amp; completion rate!
+                  </p>
                 )}
               </div>
             </section>

@@ -22,7 +22,7 @@ interface CopilotDrawerProps {
   onLoadDraft: (draft: {
     caption: string;
     hashtags: string[];
-    mediaType: "REELS" | "IMAGE" | "CAROUSEL";
+    mediaType: "REELS" | "IMAGE" | "CAROUSEL" | "STORIES";
     mediaUrls?: string[];
     scheduledFor?: string;
   }) => void;
@@ -30,7 +30,7 @@ interface CopilotDrawerProps {
 
 const STARTER_PROMPTS = [
   "I want to post a Reel today — suggest trending hashtags and the best reach time",
-  "Plan and space 3 posts this week based on my account reach",
+  "Create a bold behind-the-scenes Instagram Story with an interactive poll idea",
   "Should I post today or wait for a better reach window?",
 ];
 
@@ -44,7 +44,9 @@ export function CopilotDrawer({
   const [messages, setMessages] = useState<CopilotMessage[]>([]);
   const [input, setInput] = useState("");
   const [attachedUrls, setAttachedUrls] = useState<string[]>([]);
-  const [attachedType, setAttachedType] = useState<"" | "REELS" | "IMAGE" | "CAROUSEL">("");
+  const [attachedType, setAttachedType] = useState<
+    "" | "REELS" | "IMAGE" | "CAROUSEL" | "STORIES"
+  >("");
   const [mediaWarnings, setMediaWarnings] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
   const [sending, setSending] = useState(false);

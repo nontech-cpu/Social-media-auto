@@ -199,7 +199,9 @@ class ScheduledPost(Base):
     account_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("instagram_accounts.id", ondelete="CASCADE"), index=True
     )
-    media_type: Mapped[str] = mapped_column(String(24), default="IMAGE")  # IMAGE | REELS | CAROUSEL
+    media_type: Mapped[str] = mapped_column(
+        String(24), default="IMAGE"
+    )  # IMAGE | REELS | CAROUSEL | STORIES
     media_urls_json: Mapped[list[str]] = mapped_column(JSON, default=list)
     cover_url: Mapped[str] = mapped_column(String(1500), default="")
     caption: Mapped[str] = mapped_column(Text, default="")
@@ -250,3 +252,29 @@ class NichePriorCache(Base):
     rationale: Mapped[str] = mapped_column(Text, default="")
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class StoryItem(Base):
+    __tablename__ = "story_items"
+    __table_args__ = (
+        UniqueConstraint("account_id", "ig_media_id", name="uq_account_ig_story"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("instagram_accounts.id", ondelete="CASCADE"), index=True
+    )
+    ig_media_id: Mapped[str] = mapped_column(String(64), index=True)
+    media_type: Mapped[str] = mapped_column(String(24), default="IMAGE")
+    media_url: Mapped[str] = mapped_column(String(1500), default="")
+    thumbnail_url: Mapped[str] = mapped_column(String(1500), default="")
+    permalink: Mapped[str] = mapped_column(String(1000), default="")
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    reach: Mapped[int] = mapped_column(Integer, default=0)
+    views: Mapped[int] = mapped_column(Integer, default=0)
+    replies: Mapped[int] = mapped_column(Integer, default=0)
+    exits: Mapped[int] = mapped_column(Integer, default=0)
+    taps_forward: Mapped[int] = mapped_column(Integer, default=0)
+    taps_back: Mapped[int] = mapped_column(Integer, default=0)
+    completion_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

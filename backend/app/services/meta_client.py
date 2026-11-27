@@ -310,6 +310,49 @@ class MetaGraphClient:
                 continue
         return {}
 
+    async def fetch_active_stories(
+        self, ig_user_id: str, access_token: str
+    ) -> list[dict[str, Any]]:
+        """Fetch currently live (24h window) Instagram Stories for this account."""
+        try:
+            resp = await self._request(
+                "GET",
+                f"/{ig_user_id}/stories",
+                params={
+                    "fields": "id,media_type,media_url,thumbnail_url,permalink,timestamp",
+                    "access_token": access_token,
+                },
+            )
+            return resp.get("data", [])
+        except MetaAPIError:
+            return []
+
+    async def fetch_story_insights(
+        self, ig_story_id: str, access_token: str
+    ) -> dict[str, int]:
+        """Fetch Story-level insights (reach, views, replies, exits, taps) safely."""
+        for metrics in (
+            "reach,views,replies,exits,taps_forward,taps_back",
+            "reach,impressions,replies,exits,taps_forward,taps_back",
+            "reach,replies",
+        ):
+            try:
+                resp = await self._request(
+                    "GET",
+                    f"/{ig_story_id}/insights",
+                    params={"metric": metrics, "access_token": access_token},
+                )
+                parsed: dict[str, int] = {}
+                for row in resp.get("data", []):
+                    name = row.get("name")
+                    values = row.get("values") or []
+                    if name and values:
+                        parsed[name] = int(values[0].get("value", 0) or 0)
+                return parsed
+            except MetaAPIError:
+                continue
+        return {}
+
     async def fetch_account_insights(
         self, ig_user_id: str, access_token: str
     ) -> dict[str, Any]:
@@ -446,6 +489,20 @@ class MetaGraphClient:
                 },
             )
             return str(parent_resp["id"])
+
+        if media_type == "STORIES":
+            url = media_urls[0]
+            is_video = url.lower().split("?")[0].endswith((".mp4", ".mov"))
+            story_payload: dict[str, Any] = {
+                "media_type": "STORIES",
+                "access_token": access_token,
+            }
+            if is_video:
+                story_payload["video_url"] = url
+            else:
+                story_payload["image_url"] = url
+            resp = await self._request("POST", f"/{ig_user_id}/media", data=story_payload)
+            return str(resp["id"])
 
         if media_type == "REELS":
             payload: dict[str, Any] = {

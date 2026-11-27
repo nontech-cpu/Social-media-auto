@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api", tags=["posts"])
 
 
 class CreateScheduledPostInput(BaseModel):
-    media_type: Literal["IMAGE", "REELS", "CAROUSEL"] = "IMAGE"
+    media_type: Literal["IMAGE", "REELS", "CAROUSEL", "STORIES"] = "IMAGE"
     media_urls: list[str] = Field(min_length=1, max_length=10)
     cover_url: str = ""
     caption: str = ""
@@ -78,7 +78,10 @@ def _serialize_post(post: ScheduledPost) -> dict:
 
 
 @router.post("/media/upload")
-async def upload_media_file(file: UploadFile = File(...)) -> dict:
+async def upload_media_file(
+    file: UploadFile = File(...),
+    target_format: Literal["", "IMAGE", "REELS", "CAROUSEL", "STORIES"] = Query(default=""),
+) -> dict:
     data = await file.read()
     service = MediaStorageService(get_settings())
     try:
@@ -86,6 +89,7 @@ async def upload_media_file(file: UploadFile = File(...)) -> dict:
             data,
             filename=file.filename or "upload.jpg",
             content_type=file.content_type or "",
+            target_format=target_format or None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

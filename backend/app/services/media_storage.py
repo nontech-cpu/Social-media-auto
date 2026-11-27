@@ -71,9 +71,39 @@ def validate_instagram_media_specs(
     height: int | None,
     duration_seconds: float | None,
     settings: Settings,
+    target_format: str | None = None,
+    is_video: bool = False,
 ) -> list[str]:
     """Validate uploaded media against Instagram Graph API constraints and return warnings."""
     warnings: list[str] = []
+    effective_format = (target_format or media_type).upper()
+
+    if effective_format == "STORIES":
+        max_bytes = (
+            settings.media_max_story_bytes if is_video or media_type == "REELS" else settings.media_max_image_bytes
+        )
+        if size_bytes > max_bytes:
+            raise ValueError(
+                f"Story file size ({size_bytes // (1024 * 1024)} MB) exceeds Instagram's "
+                f"{max_bytes // (1024 * 1024)} MB Story limit."
+            )
+        if (is_video or media_type == "REELS") and duration_seconds is not None:
+            if duration_seconds < settings.media_min_reel_seconds:
+                raise ValueError(
+                    f"Video Story ({duration_seconds:.1f}s) is shorter than {settings.media_min_reel_seconds:.0f}s."
+                )
+            if duration_seconds > settings.media_max_story_seconds:
+                raise ValueError(
+                    f"Video Story ({duration_seconds:.0f}s) exceeds Instagram's {settings.media_max_story_seconds:.0f}s limit."
+                )
+        if width and height and height > 0:
+            ratio = width / height
+            if ratio > 0.72:
+                warnings.append(
+                    f"Media aspect ratio {ratio:.2f}:1 ({width}x{height}) is wider than 9:16 vertical — Instagram Stories look best in 9:16 vertical format."
+                )
+        return warnings
+
     if media_type == "IMAGE":
         if size_bytes > settings.media_max_image_bytes:
             raise ValueError(
@@ -130,7 +160,12 @@ class MediaStorageService:
         )
 
     async def upload(
-        self, data: bytes, filename: str, content_type: str = ""
+        self,
+        data: bytes,
+        filename: str,
+        content_type: str = "",
+        *,
+        target_format: str | None = None,
     ) -> UploadedMedia:
         if not data:
             raise ValueError("Uploaded file is empty.")
@@ -161,6 +196,8 @@ class MediaStorageService:
             height=uploaded.height,
             duration_seconds=uploaded.duration_seconds,
             settings=self.settings,
+            target_format=target_format,
+            is_video=media_type == "REELS",
         )
         return uploaded
 

@@ -3,7 +3,8 @@
 import asyncio
 import math
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from statistics import median
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -18,10 +19,12 @@ from app.models.entities import (
     InstagramAccount,
     MediaItem,
     ScheduledPost,
+    StoryItem,
 )
 from app.services.brand_scraper import extract_hashtags_from_text
 from app.services.meta_client import MetaGraphClient
 from app.services.recommendation_engine import (
+    _normalize_format,
     build_account_recommendations,
     serialize_recommendation_result,
 )
@@ -282,6 +285,56 @@ async def sync_account_and_compute_slots(
         follower_count=account.followers_count,
     )
     db.add(snapshot)
+
+    # Capture active 24h Instagram Stories + insights before expiry
+    synced_stories_count = 0
+    raw_stories = await meta_client.fetch_active_stories(account.ig_user_id, access_token)
+    if raw_stories:
+        existing_stories = (
+            await db.execute(select(StoryItem).where(StoryItem.account_id == account.id))
+        ).scalars().all()
+        stories_by_ig_id = {row.ig_media_id: row for row in existing_stories}
+
+        async def _fetch_story_ins(sid: str) -> dict[str, int]:
+            async with sem:
+                return await meta_client.fetch_story_insights(sid, access_token)
+
+        story_insights_list = await asyncio.gather(
+            *[_fetch_story_ins(str(s["id"])) for s in raw_stories]
+        )
+        for st_item, st_ins in zip(raw_stories, story_insights_list):
+            sid = str(st_item["id"])
+            st_pub = _parse_meta_timestamp(str(st_item.get("timestamp") or ""))
+            st_reach = int(st_ins.get("reach", 0) or 0)
+            st_views = int(st_ins.get("views", st_ins.get("impressions", 0)) or 0)
+            st_replies = int(st_ins.get("replies", 0) or 0)
+            st_exits = int(st_ins.get("exits", 0) or 0)
+            st_fwd = int(st_ins.get("taps_forward", 0) or 0)
+            st_back = int(st_ins.get("taps_back", 0) or 0)
+            comp_rate = (
+                round(max(0.0, (1.0 - (st_exits / st_reach)) * 100.0), 1)
+                if st_reach > 0
+                else 0.0
+            )
+            st_rec = stories_by_ig_id.get(sid)
+            if st_rec is None:
+                st_rec = StoryItem(account_id=account.id, ig_media_id=sid, published_at=st_pub)
+                db.add(st_rec)
+            st_rec.media_type = str(st_item.get("media_type") or "IMAGE")
+            st_rec.media_url = str(st_item.get("media_url") or "")
+            st_rec.thumbnail_url = str(st_item.get("thumbnail_url") or st_item.get("media_url") or "")
+            st_rec.permalink = str(st_item.get("permalink") or "")
+            st_rec.published_at = st_pub
+            st_rec.reach = st_reach
+            st_rec.views = st_views
+            st_rec.replies = st_replies
+            st_rec.exits = st_exits
+            st_rec.taps_forward = st_fwd
+            st_rec.taps_back = st_back
+            st_rec.completion_rate = comp_rate
+            st_rec.synced_at = datetime.now(timezone.utc)
+            synced_stories_count += 1
+
     account.last_synced_at = datetime.now(timezone.utc)
     await db.flush()
 
@@ -289,6 +342,7 @@ async def sync_account_and_compute_slots(
     await db.commit()
     return {
         "synced_media_count": synced_count,
+        "synced_stories_count": synced_stories_count,
         "computed_slots": len(slots),
         "followers_count": account.followers_count,
     }
@@ -407,6 +461,21 @@ async def build_analytics_overview(
         )
     hashtag_leaderboard.sort(key=lambda x: (x["avg_reach"], x["avg_engagement_rate"]), reverse=True)
 
+    all_reaches = [max(0, m.reach) for m in media_rows]
+    global_median_reach = float(median(all_reaches)) if all_reaches else 0.0
+    format_median_reach: dict[str, float] = {}
+    by_norm_fmt: dict[str, list[int]] = defaultdict(list)
+    for m in media_rows:
+        by_norm_fmt[_normalize_format(m.media_type)].append(max(0, m.reach))
+    for n_fmt, r_vals in by_norm_fmt.items():
+        format_median_reach[n_fmt] = float(median(r_vals)) if len(r_vals) >= 2 else global_median_reach
+
+    def _format_multiplier(item: MediaItem) -> float:
+        base = format_median_reach.get(_normalize_format(item.media_type), global_median_reach)
+        if base <= 0:
+            return 1.0 if item.reach > 0 else 0.0
+        return round(item.reach / base, 2)
+
     top_posts = sorted(
         media_rows,
         key=lambda m: (m.reach, m.saves + m.shares, m.likes),
@@ -415,10 +484,17 @@ async def build_analytics_overview(
     bottom_posts = (
         [
             {
+                "id": m.id,
                 "ig_media_id": m.ig_media_id,
                 "media_type": m.media_type,
+                "permalink": m.permalink,
+                "thumbnail_url": m.thumbnail_url,
                 "reach": m.reach,
+                "likes": m.likes,
+                "saves": m.saves,
+                "shares": m.shares,
                 "engagement_rate": m.engagement_rate,
+                "format_multiplier": _format_multiplier(m),
                 "caption": m.caption[:140],
             }
             for m in sorted(media_rows, key=lambda m: (m.reach, m.saves + m.shares))[:3]
@@ -495,6 +571,89 @@ async def build_analytics_overview(
         "failed": sum(1 for st in sched_rows if st == "FAILED"),
     }
 
+    story_rows = (
+        await db.execute(
+            select(StoryItem)
+            .where(StoryItem.account_id == account.id)
+            .order_by(StoryItem.published_at.desc())
+        )
+    ).scalars().all()
+    story_analytics = {
+        "stories_tracked": len(story_rows),
+        "avg_story_reach": (
+            round(sum(s.reach for s in story_rows) / len(story_rows), 1)
+            if story_rows
+            else 0.0
+        ),
+        "total_story_replies": sum(s.replies for s in story_rows),
+        "avg_completion_rate_pct": (
+            round(sum(s.completion_rate for s in story_rows) / len(story_rows), 1)
+            if story_rows
+            else 0.0
+        ),
+        "recent_stories": [
+            {
+                "ig_media_id": s.ig_media_id,
+                "media_type": s.media_type,
+                "thumbnail_url": s.thumbnail_url,
+                "permalink": s.permalink,
+                "published_at": s.published_at.isoformat(),
+                "reach": s.reach,
+                "views": s.views,
+                "replies": s.replies,
+                "exits": s.exits,
+                "completion_rate": s.completion_rate,
+            }
+            for s in story_rows[:6]
+        ],
+    }
+
+    now_utc = datetime.now(timezone.utc)
+    cutoff_30d = now_utc - timedelta(days=30)
+    posts_last_30d = sum(
+        1
+        for m in media_rows
+        if (
+            m.published_at.replace(tzinfo=timezone.utc)
+            if m.published_at.tzinfo is None
+            else m.published_at
+        )
+        >= cutoff_30d
+    )
+    days_since_last = None
+    if media_rows:
+        newest_dt = (
+            media_rows[0].published_at.replace(tzinfo=timezone.utc)
+            if media_rows[0].published_at.tzinfo is None
+            else media_rows[0].published_at
+        )
+        days_since_last = max(0, (now_utc - newest_dt).days)
+
+    goal_per_week = brand.posting_goal_per_week if brand and brand.posting_goal_per_week > 0 else 4
+    discovery_metrics = {
+        "discovery_multiplier": (
+            round((total_reach / total_posts) / max(account.followers_count, 1), 1)
+            if total_posts
+            else 0.0
+        ),
+        "save_rate_pct": round((total_saves / total_reach) * 100.0, 2) if total_reach > 0 else 0.0,
+        "share_rate_pct": round((total_shares / total_reach) * 100.0, 2) if total_reach > 0 else 0.0,
+        "posts_last_30d": posts_last_30d,
+        "actual_posts_per_week": round(posts_last_30d / (30.0 / 7.0), 1),
+        "goal_posts_per_week": goal_per_week,
+        "days_since_last_post": days_since_last,
+    }
+
+    profile_funnel = {
+        "reach_day": latest_snap.reach_day if latest_snap else 0,
+        "profile_views_day": latest_snap.profile_views_day if latest_snap else 0,
+        "profile_visit_rate_pct": (
+            round((latest_snap.profile_views_day / latest_snap.reach_day) * 100.0, 2)
+            if latest_snap and latest_snap.reach_day > 0
+            else 0.0
+        ),
+    }
+
     return {
         "account": {
             "id": account.id,
@@ -533,6 +692,9 @@ async def build_analytics_overview(
         },
         "has_historical_data": total_posts > 0,
         "content_dna": compute_content_dna(media_rows),
+        "discovery_metrics": discovery_metrics,
+        "profile_funnel": profile_funnel,
+        "story_analytics": story_analytics,
         "format_breakdown": format_breakdown,
         "hashtag_leaderboard": hashtag_leaderboard[:15],
         "timeline": timeline,
@@ -552,6 +714,7 @@ async def build_analytics_overview(
                 "saves": m.saves,
                 "plays": m.plays,
                 "engagement_rate": m.engagement_rate,
+                "format_multiplier": _format_multiplier(m),
             }
             for m in top_posts
         ],

@@ -65,7 +65,7 @@ export default function PlannerPage() {
     post?: ScheduledPost;
     caption?: string;
     hashtags?: string[];
-    mediaType?: "IMAGE" | "REELS" | "CAROUSEL";
+    mediaType?: "IMAGE" | "REELS" | "CAROUSEL" | "STORIES";
     mediaUrls?: string[];
     scheduledFor?: string;
   } | null>(null);
@@ -253,6 +253,17 @@ export default function PlannerPage() {
               className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/5 px-3.5 py-2 text-xs font-semibold text-white hover:bg-white/10"
             >
               <CalendarPlus className="h-3.5 w-3.5 text-emerald-400" /> Smart Batch Queue
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setComposerDraft({ mediaType: "STORIES" });
+                setComposerOpen(true);
+              }}
+              className="inline-flex items-center gap-2 rounded-xl border border-pink-400/35 bg-pink-500/15 px-3.5 py-2 text-xs font-semibold text-pink-200 hover:bg-pink-500/25"
+            >
+              <Plus className="h-3.5 w-3.5" /> New Story
             </button>
 
             <button

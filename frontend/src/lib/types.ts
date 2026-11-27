@@ -110,6 +110,7 @@ export interface MediaInsightItem {
   saves: number;
   plays: number;
   engagement_rate: number;
+  format_multiplier?: number;
 }
 
 export interface AccountAudit {
@@ -170,10 +171,67 @@ export interface AnalyticsOverview {
     media_type: string;
   }>;
   top_posts: MediaInsightItem[];
+  bottom_posts?: Array<{
+    id?: string;
+    ig_media_id: string;
+    media_type: string;
+    permalink?: string;
+    thumbnail_url?: string;
+    reach: number;
+    likes?: number;
+    saves?: number;
+    shares?: number;
+    engagement_rate: number;
+    format_multiplier?: number;
+    caption: string;
+  }>;
   top_windows: BestTimeWindow[];
   heatmap: HeatmapCell[];
   recommendations?: RecommendationPayload | null;
-  content_dna?: Record<string, unknown> | null;
+  content_dna?: {
+    has_data?: boolean;
+    best_caption_length_bucket?: string | null;
+    best_hashtag_count_bucket?: string | null;
+    question_hook_avg_reach?: number | null;
+    statement_hook_avg_reach?: number | null;
+    caption_length_performance?: Record<
+      string,
+      { count: number; avg_reach: number; avg_save_share_rate: number }
+    >;
+    hashtag_count_performance?: Record<string, { count: number; avg_reach: number }>;
+  } | null;
+  discovery_metrics?: {
+    discovery_multiplier: number;
+    save_rate_pct: number;
+    share_rate_pct: number;
+    posts_last_30d: number;
+    actual_posts_per_week: number;
+    goal_posts_per_week: number;
+    days_since_last_post: number | null;
+  } | null;
+  profile_funnel?: {
+    reach_day: number;
+    profile_views_day: number;
+    profile_visit_rate_pct: number;
+  } | null;
+  story_analytics?: {
+    stories_tracked: number;
+    avg_story_reach: number;
+    total_story_replies: number;
+    avg_completion_rate_pct: number;
+    recent_stories: Array<{
+      ig_media_id: string;
+      media_type: string;
+      thumbnail_url: string;
+      permalink: string;
+      published_at: string;
+      reach: number;
+      views: number;
+      replies: number;
+      exits: number;
+      completion_rate: number;
+    }>;
+  } | null;
   ai_audit: AccountAudit | null;
 }
 
@@ -214,7 +272,7 @@ export interface GeneratedPostPackage {
 export interface ScheduledPost {
   id: string;
   account_id: string;
-  media_type: "IMAGE" | "REELS" | "CAROUSEL";
+  media_type: "IMAGE" | "REELS" | "CAROUSEL" | "STORIES";
   media_urls: string[];
   cover_url: string;
   caption: string;
@@ -240,11 +298,11 @@ export interface CopilotMessage {
   structured_payload?: {
     draft_post?: {
       caption: string;
-      media_type: "REELS" | "IMAGE" | "CAROUSEL";
+      media_type: "REELS" | "IMAGE" | "CAROUSEL" | "STORIES";
       media_urls?: string[];
     };
     media_urls?: string[];
-    media_type?: "REELS" | "IMAGE" | "CAROUSEL";
+    media_type?: "REELS" | "IMAGE" | "CAROUSEL" | "STORIES";
     hashtags?: string[];
     recommended_slots?: Array<{
       scheduled_for: string;

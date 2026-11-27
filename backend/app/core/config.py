@@ -72,8 +72,10 @@ class Settings(BaseSettings):
     # --- Instagram Media Compliance Limits ---
     media_max_image_bytes: int = Field(default=8 * 1024 * 1024, ge=1024)
     media_max_video_bytes: int = Field(default=300 * 1024 * 1024, ge=1024)
+    media_max_story_bytes: int = Field(default=100 * 1024 * 1024, ge=1024)
     media_min_reel_seconds: float = Field(default=3.0, ge=1.0)
     media_max_reel_seconds: float = Field(default=900.0, ge=10.0)
+    media_max_story_seconds: float = Field(default=60.0, ge=3.0, le=120.0)
 
     # --- 7-Stage Recommendation Engine Hyperparameters ---
     rec_likes_weight: float = 1.0

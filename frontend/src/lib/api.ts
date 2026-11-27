@@ -93,9 +93,10 @@ export const api = {
     }),
 
   // Media Upload
-  uploadMedia: async (file: File) => {
+  uploadMedia: async (file: File, targetFormat?: "IMAGE" | "REELS" | "CAROUSEL" | "STORIES") => {
     const form = new FormData();
     form.append("file", file);
+    const query = targetFormat ? `?target_format=${encodeURIComponent(targetFormat)}` : "";
     return apiRequest<{
       url: string;
       media_type: "IMAGE" | "REELS";
@@ -108,7 +109,7 @@ export const api = {
       aspect_ratio?: number | null;
       duration_seconds?: number | null;
       warnings?: string[];
-    }>("/api/media/upload", { method: "POST", body: form });
+    }>(`/api/media/upload${query}`, { method: "POST", body: form });
   },
 
   // AI Copilot & Batch Planner
@@ -116,7 +117,7 @@ export const api = {
     accountId: string,
     payload: {
       topic: string;
-      media_type: "REELS" | "IMAGE" | "CAROUSEL";
+      media_type: "REELS" | "IMAGE" | "CAROUSEL" | "STORIES";
       tone_override?: string;
       hashtags_count?: number;
     }
@@ -131,7 +132,7 @@ export const api = {
     payload: {
       items: Array<{
         topic: string;
-        media_type: "REELS" | "IMAGE" | "CAROUSEL";
+        media_type: "REELS" | "IMAGE" | "CAROUSEL" | "STORIES";
         media_urls: string[];
       }>;
       min_gap_hours?: number;
@@ -144,7 +145,7 @@ export const api = {
       planned_items: Array<{
         index: number;
         topic: string;
-        media_type: "REELS" | "IMAGE" | "CAROUSEL";
+        media_type: "REELS" | "IMAGE" | "CAROUSEL" | "STORIES";
         media_urls: string[];
         recommended_caption: string;
         hashtags: Array<{ hashtag: string; tier: string; why_it_boosts_reach: string }>;
@@ -165,7 +166,10 @@ export const api = {
   sendChatMessage: (
     accountId: string,
     message: string,
-    media?: { media_urls?: string[]; media_type?: "" | "REELS" | "IMAGE" | "CAROUSEL" }
+    media?: {
+      media_urls?: string[];
+      media_type?: "" | "REELS" | "IMAGE" | "CAROUSEL" | "STORIES";
+    }
   ) =>
     apiRequest<CopilotMessage>(`/api/ai/${accountId}/chat`, {
       method: "POST",
@@ -182,7 +186,7 @@ export const api = {
   schedulePosts: (
     accountId: string,
     posts: Array<{
-      media_type: "IMAGE" | "REELS" | "CAROUSEL";
+      media_type: "IMAGE" | "REELS" | "CAROUSEL" | "STORIES";
       media_urls: string[];
       cover_url?: string;
       caption: string;
@@ -201,7 +205,7 @@ export const api = {
   publishNow: (
     accountId: string,
     post: {
-      media_type: "IMAGE" | "REELS" | "CAROUSEL";
+      media_type: "IMAGE" | "REELS" | "CAROUSEL" | "STORIES";
       media_urls: string[];
       cover_url?: string;
       caption: string;
