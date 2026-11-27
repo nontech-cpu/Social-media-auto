@@ -514,10 +514,10 @@ class AICopilotService:
                 .limit(10)
             )
         ).scalars().all()
-        # Keep only the 4 most recent short turns to limit tokens and prevent old-turn language drift
+        # Keep only the previous 4 short turns (excluding just-flushed current msg) to limit tokens & prevent language drift
         recent_history = [
-            {"role": m.role, "text": m.content[:180]}
-            for m in reversed(history_rows[:4])
+            {"role": m.role, "text": m.content[:150]}
+            for m in reversed(history_rows[1:5])
         ]
 
         # Recover most recent attached media & draft from conversation history for multi-turn continuity
@@ -663,13 +663,14 @@ class AICopilotService:
                 "caption_preview": prior_caption[:240],
                 "hashtags": prior_hashtags[:8],
             }
+        strict_lang_rule = _detect_message_language_rule(user_message)
         turn_payload["current_local_time"] = current_local_str
         turn_payload["current_local_iso"] = current_local_iso
-        turn_payload["strict_reply_language"] = _detect_message_language_rule(user_message)
 
         user_prompt_text = (
             f"Turn Context JSON: {json.dumps(turn_payload)}\n"
-            f"Latest User Message: {user_message}"
+            f"Latest User Message: {user_message}\n"
+            f"Mandatory Reply Language Lock: {strict_lang_rule}"
         )
 
         finish_args, plain_reply, chat_usage = await generate_agent_turn_with_tools(

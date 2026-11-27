@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
+import json
 from typing import Any, TypeVar
 
 import httpx
@@ -181,6 +182,7 @@ async def generate_agent_turn_with_tools(
     if media_parts:
         initial_parts.extend(media_parts)
     conv: list[types.Content] = [types.Content(role="user", parts=initial_parts)]
+    fetched_results: list[dict[str, Any]] = []
 
     agg: dict[str, Any] = {
         "model": "",
@@ -215,12 +217,8 @@ async def generate_agent_turn_with_tools(
             reply_txt = (getattr(resp, "text", None) or "").strip()
             return None, reply_txt, agg
 
-        cands = getattr(resp, "candidates", None) or []
-        if cands and getattr(cands[0], "content", None) is not None:
-            conv.append(cands[0].content)
-
         finish_args: dict[str, Any] | None = None
-        fn_responses: list[types.Part] = []
+        new_tool_count = 0
         for fc in fcs:
             fc_name = str(getattr(fc, "name", "") or "")
             fc_args = dict(getattr(fc, "args", None) or {})
@@ -229,15 +227,23 @@ async def generate_agent_turn_with_tools(
                 continue
             agg["tool_calls"].append(fc_name)
             tool_out = await tool_executor(fc_name, fc_args)
-            fn_responses.append(
-                types.Part.from_function_response(name=fc_name, response=tool_out)
-            )
+            fetched_results.append({"tool": fc_name, "result": tool_out})
+            new_tool_count += 1
 
         if finish_args is not None:
             return finish_args, "", agg
 
-        if fn_responses:
-            conv.append(types.Content(role="tool", parts=fn_responses))
+        if new_tool_count > 0:
+            # Feed retrieved tool data back in a clean user turn to avoid SDK thought_signature stripping on 1.9.0
+            updated_text = (
+                f"{user_text}\n"
+                "Retrieved Tool Data (already executed — use this exact data and now call `complete_response` or reply directly):\n"
+                f"{json.dumps(fetched_results)}"
+            )
+            next_parts: list[types.Part] = [types.Part(text=updated_text)]
+            if media_parts:
+                next_parts.extend(media_parts)
+            conv = [types.Content(role="user", parts=next_parts)]
         else:
             break
 

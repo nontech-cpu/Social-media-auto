@@ -724,5 +724,59 @@ async def test_execute_copilot_tools_lazy_dispatch(db_session, test_settings, ci
     assert len(slots_res["recommended_slots"]) == 2
 
 
+@pytest.mark.asyncio
+async def test_generate_agent_turn_with_tools_uses_user_role_for_function_response(
+    monkeypatch, test_settings
+) -> None:
+    from types import SimpleNamespace
+    from google.genai import types
+    from app.services import gemini_helper
+
+    test_settings.gemini_api_key = "test-key"
+    captured_turns: list[tuple[list[str], str]] = []
+    call_idx = {"n": 0}
+
+    async def fake_fallback(settings, *, contents, config_factory, use_tools_enabled=False):
+        roles = [getattr(c, "role", "") for c in contents]
+        first_txt = contents[0].parts[0].text if contents and contents[0].parts else ""
+        captured_turns.append((roles, first_txt))
+        idx = call_idx["n"]
+        call_idx["n"] += 1
+        usage = SimpleNamespace(
+            prompt_token_count=400,
+            candidates_token_count=20,
+            thoughts_token_count=0,
+            cached_content_token_count=0,
+            total_token_count=420,
+        )
+        if idx == 0:
+            fc = SimpleNamespace(name="get_recent_posts", args={"limit": 5})
+            cand_content = types.Content(role="model", parts=[types.Part(text="checking")])
+            return SimpleNamespace(function_calls=[fc], candidates=[SimpleNamespace(content=cand_content)], text="", usage_metadata=usage), "gemini-3.5-flash-lite"
+        fc2 = SimpleNamespace(name="complete_response", args={"reply": "Done!", "requested_action": "chat"})
+        return SimpleNamespace(function_calls=[fc2], candidates=[], text="", usage_metadata=usage), "gemini-3.5-flash-lite"
+
+    monkeypatch.setattr(gemini_helper, "_call_with_model_fallback", fake_fallback)
+
+    async def fake_exec(name: str, args: dict):
+        assert name == "get_recent_posts"
+        return {"posts": [{"id": "p1", "status": "PUBLISHED"}]}
+
+    finish_args, reply_txt, agg = await gemini_helper.generate_agent_turn_with_tools(
+        test_settings,
+        system_instruction="Static rules",
+        user_text="have u posted?",
+        tools=[],
+        tool_executor=fake_exec,
+    )
+    assert finish_args is not None and finish_args["reply"] == "Done!"
+    assert agg["tool_calls"] == ["get_recent_posts"]
+    assert captured_turns[1][0] == ["user"]
+    assert "Retrieved Tool Data" in captured_turns[1][1]
+    assert "PUBLISHED" in captured_turns[1][1]
+    assert all(r in ("user", "model") for roles, _ in captured_turns for r in roles)
+
+
+
 
 
