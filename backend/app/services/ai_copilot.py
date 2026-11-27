@@ -396,14 +396,33 @@ class AICopilotService:
             "current_local_iso": current_local_iso,
             "timezone": account.timezone,
             "account": overview["account"],
+            "account_insights": overview.get("account_insights"),
             "kpis": overview["kpis"],
             "has_historical_data": overview["has_historical_data"],
             "confidence_tier": rec_info.get("confidence_tier", "learning"),
+            "posts_analyzed_count": rec_info.get("posts_analyzed_count", 0),
+            "lookback_days": rec_info.get("lookback_days", 90),
             "prior_source": rec_info.get("prior_source", "uniform"),
             "min_gap_hours": rec_info.get("min_gap_hours", 12),
             "format_breakdown": overview["format_breakdown"],
             "content_dna": overview.get("content_dna"),
+            "top_posts": [
+                {
+                    "media_type": p["media_type"],
+                    "reach": p["reach"],
+                    "likes": p["likes"],
+                    "comments": p["comments"],
+                    "saves": p["saves"],
+                    "shares": p["shares"],
+                    "engagement_rate": p["engagement_rate"],
+                    "published_at": p["published_at"],
+                    "caption_preview": p["caption"][:120],
+                }
+                for p in overview.get("top_posts", [])[:5]
+            ],
+            "bottom_posts": overview.get("bottom_posts", []),
             "top_windows": overview["top_windows"][:5],
+            "weekly_schedule": rec_info.get("weekly_schedule", [])[:7],
             "avoid_windows": rec_info.get("avoid_windows", [])[:5],
             "next_recommended_slots": [
                 {
@@ -416,6 +435,8 @@ class AICopilotService:
                 for s in precomputed_slots
             ],
             "top_hashtags": overview["hashtag_leaderboard"][:8],
+            "queue_stats": overview.get("queue_stats"),
+            "ai_audit": overview.get("ai_audit"),
             "existing_queue": summarize_existing_queue(queued_posts, account.timezone),
             "recent_posts_status": recent_posts_status,
             "attached_media": {
@@ -442,16 +463,17 @@ class AICopilotService:
 
         prompt = (
             "You are SocialMediaAI's built-in Instagram Growth & Scheduling Agent. You CAN schedule and publish posts directly when the user asks!\n"
-            "STRICT LANGUAGE RULES:\n"
+            "STRICT LANGUAGE & TONE RULES:\n"
             "1. `reply` MUST match the exact language/style of the user's Latest User Message "
             "(if user writes English -> reply in English; if Hinglish -> reply in natural Hinglish; if Hindi -> Hindi).\n"
-            "2. `proposed_caption` MUST be written in `brand.language` (English by default unless user explicitly asks for another language).\n\n"
+            "2. Explain analytics, best times, avoid hours, format performance, Content DNA, and audit findings in simple everyday creator-friendly words — NEVER use technical math/developer jargon like 'Bayesian', 'UCB', 'MAD outlier', 'n_eff', or 'dynamic_niche_prior'.\n"
+            "3. `proposed_caption` MUST be written in `brand.language` (English by default unless user explicitly asks for another language).\n\n"
             "ACTION & SCHEDULING RULES (CRITICAL — NEVER CLAIM SOMETHING IS SCHEDULED UNLESS `requested_action` IS SET):\n"
             "- If the user confirms scheduling (e.g. 'post at 3:36pm today', 'schedule it', 'queue kar do'), set `requested_action='schedule'` "
             "and set `requested_scheduled_for_iso` to the exact ISO-8601 timestamp using `current_local_iso` timezone (e.g. '2026-11-26T15:36:00+05:30'), or 'best' if they ask you to pick the best time.\n"
             "- If the user asks to post immediately right now (e.g. 'post now', 'abhi post kar do', 'post it now'), set `requested_action='publish_now'`.\n"
             "- If the user refers to the earlier attached photo/caption/hashtags (e.g. 'same caption and hashtag', 'schedule this', 'have u posted?'), set `use_previous_draft=true`.\n"
-            "- Otherwise use `requested_action='draft'` (when creating/updating a draft) or `'chat'` (for pure questions — check `recent_posts_status` to answer accurately if a post is `PUBLISHED` with `published_permalink`, `QUEUED`, or `FAILED`, and return empty `proposed_caption`/`proposed_hashtags` when `requested_action='chat'`).\n\n"
+            "- Otherwise use `requested_action='draft'` (when creating/updating a draft) or `'chat'` (for pure questions — check `recent_posts_status`, `kpis`, `format_breakdown`, `top_posts`, `bottom_posts`, `weekly_schedule`, `avoid_windows`, `content_dna`, and `ai_audit` to answer accurately with exact numbers, and return empty `proposed_caption`/`proposed_hashtags` when `requested_action='chat'`).\n\n"
             "DATA & TIMING RULES:\n"
             "- If images are attached in this turn, analyze what is actually visible in the image(s) to craft a specific, relevant caption and hashtags.\n"
             "- Recommend posting timing dynamically based on the content/format AND the account's real historical performance (`format_breakdown`, `top_windows`, `has_historical_data`) and `existing_queue`.\n"

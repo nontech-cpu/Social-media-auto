@@ -209,3 +209,30 @@ def test_stage7_greedy_nms_respects_last_published_cooldown_and_avoid_windows() 
         ).total_seconds() / 3600.0
         assert delta_h >= res.min_gap_hours
     assert len(res.avoid_windows) == 5
+
+
+def test_adaptive_lookback_expands_to_365d_for_dormant_accounts() -> None:
+    now = datetime(2026, 11, 27, 10, 0, tzinfo=timezone.utc)
+    posts = [
+        PostTelemetry(
+            post_id=f"old_{i}",
+            published_at_utc=now - timedelta(days=160 + i),
+            content_format="CAROUSEL_ALBUM" if i % 2 == 0 else "REELS",
+            reach=100,
+            impressions=120,
+            likes=5,
+            comments=1,
+            shares=0,
+            saves=1,
+        )
+        for i in range(6)
+    ]
+    res = run_7stage_recommendation(
+        posts=posts,
+        timezone_name="Asia/Kolkata",
+        now_utc=now,
+        config=RecommendationConfig(lookback_days=90),
+    )
+    assert res.lookback_days == 365
+    assert res.posts_analyzed_count == 6
+

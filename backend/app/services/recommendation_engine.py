@@ -181,6 +181,13 @@ def _expand_online_followers(raw_map: dict[str, Any]) -> list[list[float]] | Non
     return _normalize_grid_to_mean_one(_shift_grid_pre_peak(grid_7x24, shift_hours=1))
 
 
+def _normalize_format(fmt: str) -> str:
+    low = (fmt or "").strip().lower()
+    if low == "carousel_album":
+        return "carousel"
+    return low
+
+
 def run_7stage_recommendation(
     *,
     posts: list[PostTelemetry],
@@ -201,13 +208,21 @@ def run_7stage_recommendation(
     cfg = config or RecommendationConfig()
     tz = _safe_tz(timezone_name)
     now = _as_utc(now_utc or datetime.now(timezone.utc))
-    lookback_cutoff = now - timedelta(days=cfg.lookback_days)
+    effective_lookback_days = cfg.lookback_days
+    lookback_cutoff = now - timedelta(days=effective_lookback_days)
 
-    # Filter posts inside lookback window
+    # Filter posts inside lookback window; adaptively widen to 365d for lower-frequency accounts
     recent_posts = [p for p in posts if _as_utc(p.published_at_utc) >= lookback_cutoff]
+    if len(recent_posts) < 5 and len(posts) > len(recent_posts):
+        effective_lookback_days = max(cfg.lookback_days, 365)
+        expanded_cutoff = now - timedelta(days=effective_lookback_days)
+        expanded = [p for p in posts if _as_utc(p.published_at_utc) >= expanded_cutoff]
+        recent_posts = expanded if expanded else list(posts)
+
     if content_format_filter:
+        norm_filter = _normalize_format(content_format_filter)
         fmt_matches = [
-            p for p in recent_posts if p.content_format.lower() == content_format_filter.lower()
+            p for p in recent_posts if _normalize_format(p.content_format) == norm_filter
         ]
         if len(fmt_matches) >= 3:
             recent_posts = fmt_matches
@@ -228,7 +243,7 @@ def run_7stage_recommendation(
         )
         post_score = weighted_eng / max(float(exposure), 1.0)
         raw_scores.append((p, post_score))
-        scores_by_format.setdefault(p.content_format.lower(), []).append(post_score)
+        scores_by_format.setdefault(_normalize_format(p.content_format), []).append(post_score)
 
     # Stage 3: Content-Format Normalization (De-biasing)
     all_raw = [s for _, s in raw_scores]
@@ -239,7 +254,7 @@ def run_7stage_recommendation(
 
     norm_entries: list[tuple[PostTelemetry, float, float]] = []
     for p, post_score in raw_scores:
-        fmt_med = format_medians.get(p.content_format.lower(), global_median)
+        fmt_med = format_medians.get(_normalize_format(p.content_format), global_median)
         norm_score = post_score / max(fmt_med, EPS) if global_median > EPS else 1.0
         age_days = max(0.0, (now - _as_utc(p.published_at_utc)).total_seconds() / 86400.0)
         decay_lambda = math.log(2.0) / max(cfg.half_life_days, 1.0)
@@ -451,20 +466,26 @@ def run_7stage_recommendation(
 
         if s_type == "proven":
             reason = (
-                f"{DAY_NAMES[d]} {time_lbl} ({timezone_name}) is a Proven peak slot: "
-                f"{direct_counts[d][h]} historical post(s) (n_eff={n_eff[d][h]:.1f}) delivered "
-                f"{lift_pct:+.1f}% vs your account baseline, spaced {min_gap_hours}h from nearby posts."
+                f"{DAY_NAMES[d]} at {time_lbl} is a proven strong time for your account — "
+                f"{direct_counts[d][h]} past post(s) here got {abs(lift_pct):.0f}% "
+                f"{'higher' if lift_pct >= 0 else 'lower'} engagement than average, "
+                f"spaced {min_gap_hours}h from nearby posts."
             )
         elif s_type == "benchmark":
-            reason = (
-                f"{DAY_NAMES[d]} {time_lbl} ({timezone_name}) is a Benchmark high-receptivity slot "
-                f"({resolved_prior_source}, {lift_pct:+.1f}% prior lift), spaced {min_gap_hours}h from nearby posts."
-            )
+            if "follower_online" in resolved_prior_source:
+                reason = (
+                    f"{DAY_NAMES[d]} at {time_lbl} lands right before your followers' busiest online "
+                    f"hours (+{abs(lift_pct):.0f}% expected boost), spaced {min_gap_hours}h apart."
+                )
+            else:
+                reason = (
+                    f"{DAY_NAMES[d]} at {time_lbl} is a peak activity window for audiences in your niche "
+                    f"(+{abs(lift_pct):.0f}% expected engagement), spaced {min_gap_hours}h from nearby posts."
+                )
         else:
             reason = (
-                f"{DAY_NAMES[d]} {time_lbl} ({timezone_name}) is an Exploration / Test Slot "
-                f"(UCB {confidence_tier} mode with {n_total} analyzed posts) to discover fresh reach windows, "
-                f"spaced {min_gap_hours}h apart."
+                f"{DAY_NAMES[d]} at {time_lbl} is a smart test slot to uncover new high-reach hours "
+                f"for your account, safely spaced {min_gap_hours}h from nearby posts."
             )
 
         selected.append(
@@ -508,9 +529,9 @@ def run_7stage_recommendation(
             "lift_vs_baseline": c["lift_vs_baseline"],
             "sample_size": c["sample_size"],
             "reason": (
-                f"Underperformed by {abs(c['lift_vs_baseline']):.1f}% vs baseline across {c['sample_size']} post(s)"
+                f"{c['sample_size']} past post(s) at this hour got {abs(c['lift_vs_baseline']):.0f}% lower engagement than average — better to skip."
                 if c["sample_size"] > 0
-                else f"Low prior audience activity ({c['lift_vs_baseline']:+.1f}% vs baseline)"
+                else f"Quiet audience hours (~{abs(c['lift_vs_baseline']):.0f}% below normal activity) — better to post later."
             ),
         }
         for c in avoid_candidates[:5]
@@ -519,7 +540,7 @@ def run_7stage_recommendation(
     return RecommendationResult(
         confidence_tier=confidence_tier,
         posts_analyzed_count=n_total,
-        lookback_days=cfg.lookback_days,
+        lookback_days=effective_lookback_days,
         min_gap_hours=min_gap_hours,
         timezone=timezone_name,
         next_recommended_slot=selected[0] if selected else None,

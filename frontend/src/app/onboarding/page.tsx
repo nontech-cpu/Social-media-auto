@@ -14,6 +14,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { pickInitialAccountId, saveSelectedAccountId } from "@/lib/selectedAccount";
 import type { BrandProfile, InstagramAccount } from "@/lib/types";
 import { Navbar } from "@/components/Navbar";
 
@@ -45,6 +46,7 @@ function OnboardingWizard() {
     posting_goal_per_week: 4,
   });
   const [accounts, setAccounts] = useState<InstagramAccount[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState("");
   const [selectedTz, setSelectedTz] = useState("UTC");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -71,6 +73,9 @@ function OnboardingWizard() {
           setLanguage(brandRes.brand.language || "English");
         }
         setAccounts(accRes.accounts);
+        if (accRes.accounts.length > 0) {
+          setSelectedAccountId(pickInitialAccountId(accRes.accounts));
+        }
         setMetaConfigured(healthRes.meta_configured);
       })
       .catch(() => {
@@ -154,7 +159,14 @@ function OnboardingWizard() {
 
   return (
     <div className="min-h-screen">
-      <Navbar accounts={accounts} />
+      <Navbar
+        accounts={accounts}
+        selectedAccountId={selectedAccountId}
+        onSelectAccount={(id) => {
+          saveSelectedAccountId(id);
+          setSelectedAccountId(id);
+        }}
+      />
 
       <main className="mx-auto flex max-w-5xl items-center justify-center px-4 py-12">
         <div className="glass-panel grid w-full overflow-hidden rounded-3xl shadow-2xl md:grid-cols-[270px_1fr]">

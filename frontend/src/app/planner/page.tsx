@@ -23,6 +23,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { pickInitialAccountId, saveSelectedAccountId } from "@/lib/selectedAccount";
 import type { InstagramAccount, ScheduledPost } from "@/lib/types";
 import { Navbar } from "@/components/Navbar";
 import { PostComposerModal } from "@/components/PostComposerModal";
@@ -122,8 +123,9 @@ export default function PlannerPage() {
       .then(({ accounts: accs }) => {
         setAccounts(accs);
         if (accs.length > 0) {
-          setSelectedId(accs[0].id);
-          loadPosts(accs[0].id);
+          const initialId = pickInitialAccountId(accs);
+          setSelectedId(initialId);
+          loadPosts(initialId);
         } else {
           setLoading(false);
         }
@@ -195,6 +197,7 @@ export default function PlannerPage() {
         accounts={accounts}
         selectedAccountId={selectedId}
         onSelectAccount={(id) => {
+          saveSelectedAccountId(id);
           setSelectedId(id);
           loadPosts(id);
         }}

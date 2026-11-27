@@ -15,10 +15,23 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { pickInitialAccountId, saveSelectedAccountId } from "@/lib/selectedAccount";
 import type { AnalyticsOverview, InstagramAccount } from "@/lib/types";
 import { Navbar } from "@/components/Navbar";
 
 const SHORT_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function formatSlotTypeLabel(slotType?: string): string {
+  if (slotType === "proven") return "Best Time";
+  if (slotType === "benchmark") return "Audience Peak";
+  return "Growth Test";
+}
+
+function formatConfidenceLabel(tier?: string): string {
+  if (tier === "high_confidence") return "High Confidence";
+  if (tier === "calibrating") return "Calibrating";
+  return "Learning Mode";
+}
 
 function scoreToColor(score: number): string {
   if (score <= 0) return "bg-white/[0.03] border-white/5";
@@ -57,8 +70,9 @@ export default function DashboardPage() {
       .then(({ accounts: accs }) => {
         setAccounts(accs);
         if (accs.length > 0) {
-          setSelectedId(accs[0].id);
-          loadOverview(accs[0].id);
+          const initialId = pickInitialAccountId(accs);
+          setSelectedId(initialId);
+          loadOverview(initialId);
         } else {
           setLoading(false);
         }
@@ -130,6 +144,7 @@ export default function DashboardPage() {
         accounts={accounts}
         selectedAccountId={selectedId}
         onSelectAccount={(id) => {
+          saveSelectedAccountId(id);
           setSelectedId(id);
           loadOverview(id);
         }}
@@ -225,7 +240,7 @@ export default function DashboardPage() {
                     overview.top_windows[0]?.label ||
                     "Run Sync",
                   sub: overview.recommendations?.next_recommended_slot
-                    ? `${overview.recommendations.next_recommended_slot.slot_type.toUpperCase()} • ${overview.recommendations.confidence_tier.replace("_", " ")} (${overview.recommendations.min_gap_hours}h spacing)`
+                    ? `${formatSlotTypeLabel(overview.recommendations.next_recommended_slot.slot_type)} • ${formatConfidenceLabel(overview.recommendations.confidence_tier)} (${overview.recommendations.min_gap_hours}h gap between posts)`
                     : "Need historical posts",
                   icon: Clock,
                 },
@@ -256,21 +271,20 @@ export default function DashboardPage() {
                       </h2>
                       {overview.recommendations && (
                         <span className="rounded-full border border-indigo-400/30 bg-indigo-500/15 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-indigo-200">
-                          {overview.recommendations.confidence_tier.replace("_", " ")} •{" "}
-                          {overview.recommendations.posts_analyzed_count} posts
+                          {formatConfidenceLabel(overview.recommendations.confidence_tier)} •{" "}
+                          {overview.recommendations.posts_analyzed_count} posts analyzed
                         </span>
                       )}
                     </div>
                     <p className="mt-0.5 text-xs text-slate-400">
-                      7-stage Bayesian + UCB engine (format-normalized, MAD outlier-clipped,{" "}
-                      {overview.recommendations?.prior_source.replaceAll("_", " ") || "dynamic prior"}).
+                      Hourly reach clock built from your real engagement (likes, comments, saves &amp; shares) and audience activity — brighter green means stronger reach.
                     </p>
                   </div>
                   {hoveredCell && (
                     <span className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] text-emerald-200">
                       {hoveredCell.day_name} {String(hoveredCell.hour_of_day).padStart(2, "0")}:00 •{" "}
-                      {hoveredCell.slot_type || "slot"} • Score {hoveredCell.combined_score}/100 (
-                      {hoveredCell.sample_size} posts)
+                      {formatSlotTypeLabel(hoveredCell.slot_type)} • Score {hoveredCell.combined_score}/100 (
+                      {hoveredCell.sample_size} past posts)
                     </span>
                   )}
                 </div>
@@ -337,7 +351,7 @@ export default function DashboardPage() {
                                   : "bg-amber-500/20 text-amber-300"
                             }`}
                           >
-                            {slot.slot_type}
+                            {formatSlotTypeLabel(slot.slot_type)}
                           </span>
                         </div>
                         <p className="mt-1 text-[11px] text-slate-400">{slot.reason}</p>
@@ -382,19 +396,24 @@ export default function DashboardPage() {
                 {overview.timeline.length === 0 ? (
                   <p className="mt-6 text-xs text-slate-400">No post history synced yet.</p>
                 ) : (
-                  <div className="mt-5 flex h-44 items-end gap-1.5">
+                  <div className="mt-5 flex h-44 items-end gap-2">
                     {overview.timeline.map((pt, i) => {
-                      const heightPct = Math.max(6, Math.round((pt.reach / maxTimelineReach) * 100));
+                      const heightPct = Math.max(8, Math.round((pt.reach / maxTimelineReach) * 100));
                       return (
                         <div
                           key={`${pt.date}-${i}`}
-                          className="group relative flex flex-1 flex-col items-center justify-end"
+                          className="group relative flex h-full flex-1 flex-col items-center justify-end gap-1"
                         >
-                          <div
-                            style={{ height: `${heightPct}%` }}
-                            className="w-full rounded-t-md bg-gradient-to-t from-indigo-500/70 to-emerald-400/90 transition group-hover:brightness-125"
-                            title={`${pt.date} (${pt.media_type}): ${pt.reach.toLocaleString()} reach • ${pt.engagement_rate}% ER`}
-                          />
+                          <div className="flex w-full flex-1 items-end">
+                            <div
+                              style={{ height: `${heightPct}%` }}
+                              className="w-full rounded-t-md bg-gradient-to-t from-indigo-500/75 to-emerald-400/90 transition group-hover:brightness-125"
+                              title={`${pt.date} (${pt.media_type}): ${pt.reach.toLocaleString()} reach • ${pt.engagement_rate}% ER`}
+                            />
+                          </div>
+                          <span className="text-[9px] text-slate-400">
+                            {overview.timeline.length <= 14 ? pt.reach : ""}
+                          </span>
                         </div>
                       );
                     })}

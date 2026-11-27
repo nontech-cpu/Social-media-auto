@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Calendar, LayoutDashboard, Rocket, Sparkles, Instagram } from "lucide-react";
+import { saveSelectedAccountId } from "@/lib/selectedAccount";
 import type { InstagramAccount } from "@/lib/types";
 
 interface NavbarProps {
@@ -68,7 +69,10 @@ export function Navbar({
               <Instagram className="h-4 w-4 text-pink-400" />
               <select
                 value={selectedAccountId || accounts[0]?.id}
-                onChange={(e) => onSelectAccount?.(e.target.value)}
+                onChange={(e) => {
+                  saveSelectedAccountId(e.target.value);
+                  onSelectAccount?.(e.target.value);
+                }}
                 className="bg-transparent text-xs font-medium text-white outline-none"
               >
                 {accounts.map((acc) => (
