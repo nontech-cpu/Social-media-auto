@@ -137,6 +137,9 @@ export interface AnalyticsOverview {
     total_reach: number;
     avg_reach_per_post: number;
     avg_engagement_rate: number;
+    viral_rate_pct?: number;
+    reach_trend_pct?: number | null;
+    er_trend_pct?: number | null;
     total_likes: number;
     total_comments: number;
     total_shares: number;

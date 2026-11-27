@@ -137,23 +137,43 @@ class AICopilotService:
     ) -> dict[str, Any]:
         overview = await build_analytics_overview(db, account)
 
+        rec_info = overview.get("recommendations") or {}
         audit_input = {
             "account": overview["account"],
             "kpis": overview["kpis"],
+            "account_insights": overview.get("account_insights"),
             "format_breakdown": overview["format_breakdown"],
             "content_dna": overview.get("content_dna"),
+            "recommendations_summary": {
+                "confidence_tier": rec_info.get("confidence_tier"),
+                "posts_analyzed_count": rec_info.get("posts_analyzed_count"),
+                "prior_source": rec_info.get("prior_source"),
+                "min_gap_hours": rec_info.get("min_gap_hours"),
+                "next_recommended_slot": rec_info.get("next_recommended_slot"),
+                "weekly_schedule": (rec_info.get("weekly_schedule") or [])[:5],
+                "avoid_windows": (rec_info.get("avoid_windows") or [])[:5],
+            },
             "top_windows": overview["top_windows"][:5],
             "top_hashtags": overview["hashtag_leaderboard"][:10],
             "top_captions": [p["caption"][:180] for p in overview["top_posts"][:5]],
+            "bottom_posts": overview.get("bottom_posts", []),
+            "queue_stats": overview.get("queue_stats"),
             "brand": {
+                "brand_name": brand.brand_name if brand else account.name,
                 "niche": brand.niche if brand else "",
+                "tone_of_voice": brand.tone_of_voice if brand else "",
                 "target_audience": brand.target_audience if brand else "",
+                "content_pillars": brand.content_pillars_json if brand else [],
+                "posting_goal_per_week": brand.posting_goal_per_week if brand else 4,
+                "language": brand.language if brand else "English",
             },
         }
         prompt = (
             "You are a senior Instagram growth strategist. Analyze ONLY the real account metrics below "
-            "(never invent numbers not present in the input). Explain what drives the highest reach, "
-            "which format wins, optimal posting timing, and a concrete 7-day plan.\n"
+            "(never invent numbers not present in the input). Inspect `account.biography`, `account.website`, "
+            "and `brand` fields accurately before claiming any profile or niche info is missing. "
+            "Ground timing advice strictly in `recommendations_summary` (including `avoid_windows` and spacing), "
+            "compare `top_posts` vs `bottom_posts` and `content_dna`, and give a concrete 7-day plan.\n"
             f"Metrics JSON: {json.dumps(audit_input)}"
         )
         parsed = await generate_structured_content(

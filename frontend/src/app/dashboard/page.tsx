@@ -193,11 +193,17 @@ export default function DashboardPage() {
                 {
                   label: "Total Synced Reach",
                   value: overview.kpis.total_reach.toLocaleString(),
-                  sub: `Avg ${overview.kpis.avg_reach_per_post.toLocaleString()} / post`,
+                  sub:
+                    overview.kpis.reach_trend_pct !== null &&
+                    overview.kpis.reach_trend_pct !== undefined
+                      ? `Avg ${overview.kpis.avg_reach_per_post.toLocaleString()} / post • ${
+                          overview.kpis.reach_trend_pct >= 0 ? "+" : ""
+                        }${overview.kpis.reach_trend_pct}% recent trend`
+                      : `Avg ${overview.kpis.avg_reach_per_post.toLocaleString()} / post`,
                   icon: Eye,
                 },
                 {
-                  label: "Avg Engagement Rate",
+                  label: "Weighted Engagement Rate",
                   value: `${overview.kpis.avg_engagement_rate}%`,
                   sub: `${overview.kpis.total_likes.toLocaleString()} likes • ${overview.kpis.total_comments.toLocaleString()} comments`,
                   icon: Activity,
@@ -207,7 +213,9 @@ export default function DashboardPage() {
                   value: (
                     overview.kpis.total_saves + overview.kpis.total_shares
                   ).toLocaleString(),
-                  sub: `${overview.kpis.total_saves} saves • ${overview.kpis.total_shares} shares`,
+                  sub: `${overview.kpis.total_saves} saves • ${overview.kpis.total_shares} shares${
+                    overview.kpis.viral_rate_pct ? ` (${overview.kpis.viral_rate_pct}% reach rate)` : ""
+                  }`,
                   icon: TrendingUp,
                 },
                 {
@@ -441,6 +449,24 @@ export default function DashboardPage() {
                 <p className="mt-2 text-sm leading-relaxed text-slate-200">
                   {overview.ai_audit.summary}
                 </p>
+                {(overview.ai_audit.winning_format || overview.ai_audit.best_posting_strategy) && (
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    {overview.ai_audit.winning_format && (
+                      <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-3.5 py-2.5 text-xs">
+                        <span className="font-semibold text-emerald-300">Winning Format: </span>
+                        <span className="text-slate-200">{overview.ai_audit.winning_format}</span>
+                      </div>
+                    )}
+                    {overview.ai_audit.best_posting_strategy && (
+                      <div className="rounded-xl border border-indigo-500/20 bg-indigo-500/5 px-3.5 py-2.5 text-xs">
+                        <span className="font-semibold text-indigo-300">Posting Strategy: </span>
+                        <span className="text-slate-200">
+                          {overview.ai_audit.best_posting_strategy}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="mt-4 grid gap-4 md:grid-cols-3">
                   <div className="rounded-xl border border-white/10 bg-black/30 p-4">
                     <h3 className="text-xs font-semibold text-emerald-300">Top Strengths</h3>

@@ -274,11 +274,23 @@ class MetaGraphClient:
     async def fetch_media_insights(
         self, ig_media_id: str, media_product_type: str, access_token: str
     ) -> dict[str, int]:
-        """Fetch media-level insights safely across Reels and Feed/Carousel items."""
+        """Fetch media-level insights safely across Reels, Carousel, and Feed items."""
         if media_product_type == "REELS":
-            metric_candidates = ["reach,saved,shares,likes,comments,views", "reach,saved,shares,plays"]
+            metric_candidates = [
+                "reach,saved,shares,likes,comments,views",
+                "reach,saved,shares,total_interactions,views",
+                "reach,saved,shares,plays",
+                "reach,saved,shares",
+                "reach,saved",
+            ]
         else:
-            metric_candidates = ["reach,saved,shares,views", "reach,saved,impressions"]
+            metric_candidates = [
+                "reach,saved,shares,views",
+                "reach,saved,shares,total_interactions",
+                "reach,saved,shares",
+                "reach,saved,impressions",
+                "reach,saved",
+            ]
 
         for metrics in metric_candidates:
             try:

@@ -15,7 +15,11 @@ from app.models.entities import (
     MediaItem,
     ScheduledPost,
 )
-from app.services.analytics_engine import compute_content_dna
+from app.services.analytics_engine import (
+    _compute_period_trend,
+    _weighted_engagement_rate,
+    compute_content_dna,
+)
 from app.services.hashtag_engine import (
     HashtagCandidate,
     HashtagEngine,
@@ -361,3 +365,87 @@ def test_compute_content_dna_segments_caption_hooks_and_hashtags() -> None:
     assert dna["best_hashtag_count_bucket"] == "6_to_12"
     assert dna["question_hook_avg_reach"] == 3000.0
     assert dna["statement_hook_avg_reach"] == 400.0
+
+
+def test_weighted_er_and_period_trend_prevent_small_reach_distortion() -> None:
+    now = datetime.now(timezone.utc)
+    # 1 tiny-reach post (reach=10, 5 likes => 50% ER) + 3 large posts (reach=10000, 300 likes => 3% ER)
+    rows = [
+        MediaItem(
+            account_id="a1",
+            ig_media_id="tiny",
+            media_type="IMAGE",
+            published_at=now - timedelta(days=1),
+            reach=10,
+            likes=5,
+            comments=0,
+            saves=0,
+            shares=0,
+            engagement_rate=50.0,
+        ),
+        MediaItem(
+            account_id="a1",
+            ig_media_id="big1",
+            media_type="REELS",
+            published_at=now - timedelta(days=2),
+            reach=20000,
+            likes=500,
+            comments=40,
+            saves=60,
+            shares=40,
+            engagement_rate=3.2,
+        ),
+        MediaItem(
+            account_id="a1",
+            ig_media_id="big2",
+            media_type="REELS",
+            published_at=now - timedelta(days=10),
+            reach=5000,
+            likes=100,
+            comments=5,
+            saves=10,
+            shares=5,
+            engagement_rate=2.4,
+        ),
+        MediaItem(
+            account_id="a1",
+            ig_media_id="big3",
+            media_type="IMAGE",
+            published_at=now - timedelta(days=15),
+            reach=5000,
+            likes=100,
+            comments=5,
+            saves=5,
+            shares=5,
+            engagement_rate=2.3,
+        ),
+    ]
+    # Exposure-weighted ER should stay near 2.9%, NOT unweighted mean ~14.5%
+    weighted_er = _weighted_engagement_rate(rows, followers_fallback=100)
+    assert 2.5 <= weighted_er <= 3.5
+    trend = _compute_period_trend(rows, followers_fallback=100)
+    assert trend["reach_trend_pct"] is not None and trend["reach_trend_pct"] > 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_media_insights_fallback_preserves_shares(test_settings) -> None:
+    client = MetaGraphClient(test_settings)
+    with respx.mock(assert_all_called=True) as mock:
+        route = mock.get("https://graph.facebook.com/v21.0/media_123/insights")
+        route.side_effect = [
+            httpx.Response(400, json={"error": {"message": "views unsupported"}}),
+            httpx.Response(400, json={"error": {"message": "total_interactions unsupported"}}),
+            httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {"name": "reach", "values": [{"value": 1200}]},
+                        {"name": "saved", "values": [{"value": 18}]},
+                        {"name": "shares", "values": [{"value": 11}]},
+                    ]
+                },
+            ),
+        ]
+        metrics = await client.fetch_media_insights("media_123", "FEED", "tok")
+        assert metrics == {"reach": 1200, "saved": 18, "shares": 11}
+

@@ -1,5 +1,6 @@
 """Real-time Instagram analytics aggregation and dynamic 7x24 Best-Time-to-Post engine."""
 
+import asyncio
 import math
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from app.models.entities import (
     BrandProfile,
     InstagramAccount,
     MediaItem,
+    ScheduledPost,
 )
 from app.services.brand_scraper import extract_hashtags_from_text
 from app.services.meta_client import MetaGraphClient
@@ -143,6 +145,41 @@ def compute_engagement_rate(
     return round((interactions / denominator) * 100.0, 3)
 
 
+def _weighted_engagement_rate(items: list[MediaItem], followers_fallback: int = 1) -> float:
+    """Exposure-weighted engagement rate so tiny-reach posts never distort account averages."""
+    if not items:
+        return 0.0
+    total_interactions = sum(
+        max(0, m.likes + m.comments + m.shares + m.saves) for m in items
+    )
+    total_reach = sum(max(0, m.reach) for m in items)
+    denominator = total_reach if total_reach > 0 else max(1, followers_fallback) * len(items)
+    return round((total_interactions / denominator) * 100.0, 2)
+
+
+def _compute_period_trend(media_rows: list[MediaItem], followers_fallback: int = 1) -> dict[str, float | None]:
+    """Compare newer half of synced posts against older half for real velocity deltas."""
+    if len(media_rows) < 4:
+        return {"reach_trend_pct": None, "er_trend_pct": None}
+    # media_rows are sorted newest -> oldest
+    mid = len(media_rows) // 2
+    recent_slice = media_rows[:mid]
+    prior_slice = media_rows[mid:]
+
+    recent_avg_reach = sum(m.reach for m in recent_slice) / len(recent_slice)
+    prior_avg_reach = sum(m.reach for m in prior_slice) / len(prior_slice)
+    reach_delta = (
+        round(((recent_avg_reach - prior_avg_reach) / prior_avg_reach) * 100.0, 1)
+        if prior_avg_reach > 0
+        else None
+    )
+
+    recent_er = _weighted_engagement_rate(recent_slice, followers_fallback)
+    prior_er = _weighted_engagement_rate(prior_slice, followers_fallback)
+    er_delta = round(recent_er - prior_er, 2) if prior_er > 0 else None
+    return {"reach_trend_pct": reach_delta, "er_trend_pct": er_delta}
+
+
 async def sync_account_and_compute_slots(
     db: AsyncSession,
     account: InstagramAccount,
@@ -172,15 +209,27 @@ async def sync_account_and_compute_slots(
     ).scalars().all()
     existing_by_ig_id = {row.ig_media_id: row for row in existing_rows}
 
+    sem = asyncio.Semaphore(8)
+
+    async def _fetch_item_insights(item_id: str, prod_type: str) -> dict[str, int]:
+        async with sem:
+            return await meta_client.fetch_media_insights(item_id, prod_type, access_token)
+
+    insights_list = await asyncio.gather(
+        *[
+            _fetch_item_insights(str(item["id"]), str(item.get("media_product_type") or "FEED"))
+            for item in raw_media
+        ]
+    )
+
     synced_count = 0
-    for item in raw_media:
+    for item, insights in zip(raw_media, insights_list):
         ig_media_id = str(item["id"])
         product_type = str(item.get("media_product_type") or "FEED")
         media_type = str(item.get("media_type") or "IMAGE")
         if product_type == "REELS":
             media_type = "REELS"
 
-        insights = await meta_client.fetch_media_insights(ig_media_id, product_type, access_token)
         likes = int(insights.get("likes", item.get("like_count", 0)) or 0)
         comments = int(insights.get("comments", item.get("comments_count", 0)) or 0)
         shares = int(insights.get("shares", 0) or 0)
@@ -305,28 +354,34 @@ async def build_analytics_overview(
     total_comments = sum(m.comments for m in media_rows)
     total_shares = sum(m.shares for m in media_rows)
     total_saves = sum(m.saves for m in media_rows)
-    avg_eng = (
-        round(sum(m.engagement_rate for m in media_rows) / total_posts, 2)
-        if total_posts
+    avg_eng = _weighted_engagement_rate(media_rows, account.followers_count)
+    viral_rate_pct = (
+        round(((total_saves + total_shares) / total_reach) * 100.0, 2)
+        if total_reach > 0
         else 0.0
     )
+    trend = _compute_period_trend(media_rows, account.followers_count)
 
     format_groups: dict[str, list[MediaItem]] = defaultdict(list)
-    hashtag_perf: dict[str, list[tuple[int, float]]] = defaultdict(list)
+    hashtag_perf: dict[str, list[tuple[int, int]]] = defaultdict(list)
     for item in media_rows:
         format_groups[item.media_type].append(item)
+        item_interactions = max(0, item.likes + item.comments + item.shares + item.saves)
         for tag in item.hashtags_json or []:
-            hashtag_perf[tag].append((item.reach, item.engagement_rate))
+            hashtag_perf[tag].append((item.reach, item_interactions))
 
     format_breakdown = []
     for fmt, items in format_groups.items():
         cnt = len(items)
+        fmt_reach = sum(max(0, i.reach) for i in items)
+        fmt_viral = sum(max(0, i.saves + i.shares) for i in items)
         format_breakdown.append(
             {
                 "format": fmt,
                 "count": cnt,
                 "avg_reach": round(sum(i.reach for i in items) / cnt, 1),
-                "avg_engagement_rate": round(sum(i.engagement_rate for i in items) / cnt, 2),
+                "avg_engagement_rate": _weighted_engagement_rate(items, account.followers_count),
+                "viral_rate_pct": round((fmt_viral / fmt_reach) * 100.0, 2) if fmt_reach > 0 else 0.0,
                 "avg_saves": round(sum(i.saves for i in items) / cnt, 1),
                 "avg_shares": round(sum(i.shares for i in items) / cnt, 1),
             }
@@ -335,12 +390,19 @@ async def build_analytics_overview(
     hashtag_leaderboard = []
     for tag, samples in hashtag_perf.items():
         cnt = len(samples)
+        tag_reach = sum(max(0, s[0]) for s in samples)
+        tag_inter = sum(s[1] for s in samples)
+        tag_er = (
+            round((tag_inter / tag_reach) * 100.0, 2)
+            if tag_reach > 0
+            else round((tag_inter / (max(1, account.followers_count) * cnt)) * 100.0, 2)
+        )
         hashtag_leaderboard.append(
             {
                 "hashtag": tag,
                 "uses": cnt,
-                "avg_reach": round(sum(s[0] for s in samples) / cnt, 1),
-                "avg_engagement_rate": round(sum(s[1] for s in samples) / cnt, 2),
+                "avg_reach": round(tag_reach / cnt, 1),
+                "avg_engagement_rate": tag_er,
             }
         )
     hashtag_leaderboard.sort(key=lambda x: (x["avg_reach"], x["avg_engagement_rate"]), reverse=True)
@@ -350,6 +412,20 @@ async def build_analytics_overview(
         key=lambda m: (m.reach, m.saves + m.shares, m.likes),
         reverse=True,
     )[:8]
+    bottom_posts = (
+        [
+            {
+                "ig_media_id": m.ig_media_id,
+                "media_type": m.media_type,
+                "reach": m.reach,
+                "engagement_rate": m.engagement_rate,
+                "caption": m.caption[:140],
+            }
+            for m in sorted(media_rows, key=lambda m: (m.reach, m.saves + m.shares))[:3]
+        ]
+        if total_posts >= 4
+        else []
+    )
 
     tz = _safe_zoneinfo(account.timezone)
     timeline = [
@@ -399,22 +475,57 @@ async def build_analytics_overview(
 
     heatmap = rec_serialized["heatmap"]
 
+    latest_snap = (
+        await db.execute(
+            select(AudienceSnapshot)
+            .where(AudienceSnapshot.account_id == account.id)
+            .order_by(AudienceSnapshot.snapshot_date.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    sched_rows = (
+        await db.execute(
+            select(ScheduledPost.status).where(ScheduledPost.account_id == account.id)
+        )
+    ).scalars().all()
+    queue_stats = {
+        "queued": sum(1 for st in sched_rows if st in ("QUEUED", "PUBLISHING")),
+        "published": sum(1 for st in sched_rows if st == "PUBLISHED"),
+        "failed": sum(1 for st in sched_rows if st == "FAILED"),
+    }
+
     return {
         "account": {
             "id": account.id,
             "username": account.username,
             "name": account.name,
+            "biography": account.biography,
+            "website": account.website,
             "profile_picture_url": account.profile_picture_url,
             "followers_count": account.followers_count,
+            "follows_count": account.follows_count,
             "media_count": account.media_count,
             "timezone": account.timezone,
             "last_synced_at": account.last_synced_at.isoformat() if account.last_synced_at else None,
         },
+        "account_insights": (
+            {
+                "reach_day": latest_snap.reach_day,
+                "profile_views_day": latest_snap.profile_views_day,
+                "has_online_followers": bool(latest_snap.online_followers_hourly_json),
+            }
+            if latest_snap
+            else None
+        ),
         "kpis": {
             "analyzed_posts": total_posts,
             "total_reach": total_reach,
             "avg_reach_per_post": round(total_reach / total_posts, 1) if total_posts else 0.0,
             "avg_engagement_rate": avg_eng,
+            "viral_rate_pct": viral_rate_pct,
+            "reach_trend_pct": trend["reach_trend_pct"],
+            "er_trend_pct": trend["er_trend_pct"],
             "total_likes": total_likes,
             "total_comments": total_comments,
             "total_shares": total_shares,
@@ -444,6 +555,8 @@ async def build_analytics_overview(
             }
             for m in top_posts
         ],
+        "bottom_posts": bottom_posts,
+        "queue_stats": queue_stats,
         "top_windows": top_windows,
         "heatmap": heatmap,
         "recommendations": rec_serialized,
