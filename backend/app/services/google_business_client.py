@@ -60,11 +60,24 @@ def _format_gbp_error(status_code: int, payload: dict[str, Any], raw_text: str) 
         reason = err_obj
 
     lower_msg = (raw_msg + " " + raw_text).lower()
+    if (
+        "insufficient authentication scopes" in lower_msg
+        or "insufficient_scope" in lower_msg
+        or "access_token_scope_insufficient" in lower_msg
+    ):
+        hint = (
+            "Google signed you in, but the Google Business permission (business.manage) was NOT granted. "
+            "Re-click Connect Google Business, TICK the checkbox 'See, edit, create, and delete your Google business listings' "
+            "on Google's consent screen, and ensure https://www.googleapis.com/auth/business.manage is saved under "
+            "Google Cloud -> Google Auth Platform -> Data Access. "
+            f"Raw Google response: {raw_msg or raw_text[:200]}"
+        )
+        return hint, reason or "GBP_SCOPE_NOT_GRANTED"
+
     if status_code in (403, 429) and (
         "quota" in lower_msg
         or "rate_limit" in lower_msg
-        or "0" in lower_msg
-        or "permission_denied" in lower_msg
+        or "0 per minute" in lower_msg
         or "has not been used in project" in lower_msg
         or "accessnotconfigured" in lower_msg
     ):

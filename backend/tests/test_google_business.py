@@ -156,6 +156,19 @@ async def test_gbp_client_discovery_metrics_reviews_and_quota_diagnostic(test_se
             await q_client.discover_locations_with_diagnostics("tok")
         assert "0 QPM quota" in str(exc_info.value)
 
+    def scope_handler(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={"error": {"code": 403, "message": "Request had insufficient authentication scopes.", "status": "PERMISSION_DENIED"}},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(scope_handler)) as scope_http:
+        s_client = GoogleBusinessClient(test_settings, http_client=scope_http)
+        with pytest.raises(GoogleBusinessAPIError) as scope_exc:
+            await s_client.discover_locations_with_diagnostics("tok")
+        assert "business.manage" in str(scope_exc.value)
+        assert "0 QPM quota" not in str(scope_exc.value)
+
 
 @pytest.mark.asyncio
 async def test_gbp_analytics_formulas_and_smart_auto_reply(

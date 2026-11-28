@@ -98,6 +98,16 @@ async def google_business_oauth_callback(
 
     try:
         tokens = await client.exchange_code_for_tokens(code)
+        granted_scope = str(tokens.get("scope") or "")
+        if granted_scope and "business.manage" not in granted_scope:
+            raise GoogleBusinessAPIError(
+                "Google signed you in, but the Google Business permission (business.manage) was NOT granted "
+                f"(granted scopes: {granted_scope}). On Google's consent screen, please TICK the checkbox "
+                "'See, edit, create, and delete your Google business listings', and verify "
+                "https://www.googleapis.com/auth/business.manage is saved under Google Auth Platform -> Data Access.",
+                status_code=403,
+                error_reason="GBP_SCOPE_NOT_GRANTED",
+            )
         userinfo = await client.fetch_userinfo(tokens["access_token"])
         discovered, diag = await client.discover_locations_with_diagnostics(tokens["access_token"])
     except GoogleBusinessAPIError as exc:
