@@ -19,6 +19,12 @@ class FetchBrandRequest(BaseModel):
     language: str = "English"
 
 
+class SuggestBrandRequest(BaseModel):
+    brand_name: str = Field(min_length=1, max_length=200)
+    niche_hint: str = ""
+    language: str = "English"
+
+
 class BrandUpdateRequest(BaseModel):
     id: str | None = None
     website_url: str = ""
@@ -101,6 +107,37 @@ async def fetch_brand_from_website(
     await db.commit()
     await db.refresh(brand)
     return {"brand": _serialize_brand(brand)}
+
+
+@router.post("/suggest-brand")
+async def suggest_brand_from_name(body: SuggestBrandRequest) -> dict:
+    """Use Gemini to generate Brand Kit suggestions tailored to the user's entered Brand Name."""
+    settings = get_settings()
+    if not settings.gemini_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="GEMINI_API_KEY is required for AI brand auto-fill.",
+        )
+    try:
+        enriched = await AICopilotService(settings).enrich_brand_from_signals(
+            brand_name=body.brand_name.strip(),
+            niche_hint=body.niche_hint.strip(),
+            language=body.language,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"AI brand suggestion failed: {exc}") from exc
+
+    return {
+        "suggestion": {
+            "brand_name": enriched.brand_name or body.brand_name.strip(),
+            "niche": enriched.niche,
+            "description": enriched.description,
+            "tone_of_voice": enriched.tone_of_voice,
+            "target_audience": enriched.target_audience,
+            "content_pillars": enriched.content_pillars,
+            "posting_goal_per_week": enriched.posting_goal_per_week,
+        }
+    }
 
 
 @router.get("/brand")

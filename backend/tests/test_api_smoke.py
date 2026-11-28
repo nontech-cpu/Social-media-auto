@@ -45,6 +45,36 @@ async def test_health_and_brand_routes_smoke(db_session_factory) -> None:
             assert get_res.status_code == 200
             assert get_res.json()["brand"]["niche"] == "AI SaaS Tools"
 
+            from app.services.ai_copilot import AICopilotService, BrandEnrichmentOutput
+
+            async def fake_enrich(self, **kwargs):
+                return BrandEnrichmentOutput(
+                    brand_name=kwargs.get("brand_name") or "Apple",
+                    niche="Consumer Electronics & Hardware",
+                    description="Innovative consumer devices and ecosystem",
+                    tone_of_voice="Clean, minimalist, inspiring",
+                    target_audience="Design-conscious tech buyers and creators",
+                    content_pillars=["Product craftsmanship", "Tips & ecosystem"],
+                    posting_goal_per_week=5,
+                )
+
+            orig_enrich = AICopilotService.enrich_brand_from_signals
+            AICopilotService.enrich_brand_from_signals = fake_enrich
+            try:
+                from app.core.config import get_settings
+
+                prev_key = get_settings().gemini_api_key
+                get_settings().gemini_api_key = "test-key"
+                sugg_res = await client.post(
+                    "/api/onboarding/suggest-brand",
+                    json={"brand_name": "apple", "language": "English"},
+                )
+                get_settings().gemini_api_key = prev_key
+                assert sugg_res.status_code == 200
+                assert sugg_res.json()["suggestion"]["niche"] == "Consumer Electronics & Hardware"
+            finally:
+                AICopilotService.enrich_brand_from_signals = orig_enrich
+
             from datetime import datetime, timezone
             from app.models.entities import AIUsageLog, InstagramAccount, ScheduledPost
 

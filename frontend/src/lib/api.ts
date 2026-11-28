@@ -57,6 +57,21 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ website_url, language }),
     }),
+  suggestBrandFromName: (brand_name: string, language: string, niche_hint = "") =>
+    apiRequest<{
+      suggestion: {
+        brand_name: string;
+        niche: string;
+        description: string;
+        tone_of_voice: string;
+        target_audience: string;
+        content_pillars: string[];
+        posting_goal_per_week: number;
+      };
+    }>("/api/onboarding/suggest-brand", {
+      method: "POST",
+      body: JSON.stringify({ brand_name, language, niche_hint }),
+    }),
   saveBrand: (brand: Partial<BrandProfile> & { brand_name: string }) =>
     apiRequest<{ brand: BrandProfile }>("/api/onboarding/brand", {
       method: "PUT",

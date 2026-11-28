@@ -39,17 +39,19 @@ function OnboardingWizard() {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [language, setLanguage] = useState("English");
+  const [loadedBrand, setLoadedBrand] = useState<BrandProfile | null>(null);
   const [brand, setBrand] = useState<Partial<BrandProfile>>({
     brand_name: "",
     niche: "",
     description: "",
-    tone_of_voice: "Authentic, engaging, value-driven",
+    tone_of_voice: "",
     target_audience: "",
     language: "English",
     colors: [],
     content_pillars: [],
     posting_goal_per_week: 4,
   });
+  const [suggesting, setSuggesting] = useState(false);
   const [accounts, setAccounts] = useState<InstagramAccount[]>([]);
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [selectedTz, setSelectedTz] = useState("UTC");
@@ -81,6 +83,7 @@ function OnboardingWizard() {
     ])
       .then(([brandRes, accRes, healthRes, gbpRes]) => {
         if (brandRes.brand) {
+          setLoadedBrand(brandRes.brand);
           setBrand(brandRes.brand);
           setWebsiteUrl(brandRes.brand.website_url || "");
           setLanguage(brandRes.brand.language || "English");
@@ -98,6 +101,80 @@ function OnboardingWizard() {
       });
   }, [searchParams]);
 
+  function handleStartBlankBrand() {
+    setError("");
+    setWebsiteUrl("");
+    setBrand({
+      brand_name: "",
+      niche: "",
+      description: "",
+      tone_of_voice: "",
+      target_audience: "",
+      language,
+      colors: [],
+      content_pillars: [],
+      posting_goal_per_week: 4,
+    });
+  }
+
+  function handleBrandNameChange(nextName: string) {
+    // If changing away from a previously loaded saved brand, detach its ID and clear stale AI fields
+    // so the previous company's niche/audience never leak onto a newly typed brand name.
+    if (
+      loadedBrand &&
+      brand.id === loadedBrand.id &&
+      nextName.trim().toLowerCase() !== (loadedBrand.brand_name || "").trim().toLowerCase()
+    ) {
+      setWebsiteUrl("");
+      setBrand({
+        brand_name: nextName,
+        niche: brand.niche === loadedBrand.niche ? "" : brand.niche,
+        description: brand.description === loadedBrand.description ? "" : brand.description,
+        tone_of_voice:
+          brand.tone_of_voice === loadedBrand.tone_of_voice ? "" : brand.tone_of_voice,
+        target_audience:
+          brand.target_audience === loadedBrand.target_audience ? "" : brand.target_audience,
+        language,
+        colors: [],
+        content_pillars: [],
+        posting_goal_per_week: 4,
+      });
+      return;
+    }
+    setBrand({ ...brand, brand_name: nextName });
+  }
+
+  async function handleSuggestBrandFromName() {
+    const name = (brand.brand_name || "").trim();
+    if (!name) {
+      setError("Enter a Brand Name first, then click Auto-Fill with AI.");
+      return;
+    }
+    setError("");
+    setSuggesting(true);
+    try {
+      const { suggestion } = await api.suggestBrandFromName(
+        name,
+        language,
+        brand.niche || ""
+      );
+      setBrand((prev) => ({
+        ...prev,
+        brand_name: suggestion.brand_name || name,
+        niche: suggestion.niche,
+        description: suggestion.description,
+        tone_of_voice: suggestion.tone_of_voice,
+        target_audience: suggestion.target_audience,
+        content_pillars: suggestion.content_pillars,
+        posting_goal_per_week: suggestion.posting_goal_per_week,
+      }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not auto-fill brand details.");
+    } finally {
+      setSuggesting(false);
+    }
+  }
+
   async function handleFetchBrand() {
     if (!websiteUrl.trim()) {
       setError("Enter a website URL or click Continue to fill your Brand Kit manually.");
@@ -107,6 +184,7 @@ function OnboardingWizard() {
     setLoading(true);
     try {
       const res = await api.fetchBrandFromWebsite(websiteUrl.trim(), language);
+      setLoadedBrand(res.brand);
       setBrand(res.brand);
       setStep(2);
     } catch (err) {
@@ -130,6 +208,7 @@ function OnboardingWizard() {
         website_url: websiteUrl.trim(),
         language,
       });
+      setLoadedBrand(res.brand);
       setBrand(res.brand);
       setStep(3);
     } catch (err) {
@@ -321,9 +400,35 @@ function OnboardingWizard() {
 
               {step === 2 && (
                 <div className="space-y-4">
-                  <div className="flex items-center gap-2 text-sm font-semibold text-white">
-                    <Palette className="h-4 w-4 text-emerald-400" />
-                    <span>Your Brand Kit</span>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                      <Palette className="h-4 w-4 text-emerald-400" />
+                      <span>Your Brand Kit</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {brand.id && (
+                        <button
+                          type="button"
+                          onClick={handleStartBlankBrand}
+                          className="rounded-lg border border-white/15 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-slate-300 hover:bg-white/10 hover:text-white"
+                        >
+                          + Start New Brand
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={handleSuggestBrandFromName}
+                        disabled={suggesting || !(brand.brand_name || "").trim()}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-40"
+                      >
+                        {suggesting ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Sparkles className="h-3 w-3" />
+                        )}
+                        Auto-Fill from Brand Name
+                      </button>
+                    </div>
                   </div>
 
                   <div className="grid gap-4 sm:grid-cols-2">
@@ -331,8 +436,8 @@ function OnboardingWizard() {
                       <label className="text-xs text-slate-400">Brand Name *</label>
                       <input
                         value={brand.brand_name || ""}
-                        onChange={(e) => setBrand({ ...brand, brand_name: e.target.value })}
-                        placeholder="e.g., FitVibe Studio"
+                        onChange={(e) => handleBrandNameChange(e.target.value)}
+                        placeholder="e.g., Apple, FitVibe Studio, Urban Cafe"
                         className="mt-1.5 w-full rounded-xl border border-white/15 bg-black/40 px-3.5 py-2 text-sm text-white outline-none focus:border-emerald-400"
                       />
                     </div>
@@ -341,7 +446,7 @@ function OnboardingWizard() {
                       <input
                         value={brand.niche || ""}
                         onChange={(e) => setBrand({ ...brand, niche: e.target.value })}
-                        placeholder="e.g., AI Tools, Fitness Coaching, D2C Fashion"
+                        placeholder="Click Auto-Fill above or enter niche"
                         className="mt-1.5 w-full rounded-xl border border-white/15 bg-black/40 px-3.5 py-2 text-sm text-white outline-none focus:border-emerald-400"
                       />
                     </div>
@@ -389,21 +494,24 @@ function OnboardingWizard() {
                     <div>
                       <label className="text-xs text-slate-400">Extracted Brand Colors</label>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
-                        {(brand.colors && brand.colors.length > 0
-                          ? brand.colors
-                          : ["#10B981", "#6366F1"]
-                        ).map((hex) => (
-                          <span
-                            key={hex}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-black/40 px-2 py-1 text-[11px] text-slate-300"
-                          >
+                        {brand.colors && brand.colors.length > 0 ? (
+                          brand.colors.map((hex) => (
                             <span
-                              className="h-3 w-3 rounded-full"
-                              style={{ backgroundColor: hex }}
-                            />
-                            {hex}
+                              key={hex}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-black/40 px-2 py-1 text-[11px] text-slate-300"
+                            >
+                              <span
+                                className="h-3 w-3 rounded-full"
+                                style={{ backgroundColor: hex }}
+                              />
+                              {hex}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-[11px] text-slate-500">
+                            Extracted automatically when fetching a website
                           </span>
-                        ))}
+                        )}
                       </div>
                     </div>
                   </div>

@@ -368,9 +368,13 @@ class AICopilotService:
         *,
         scraped: ScrapedBrand | None = None,
         account: InstagramAccount | None = None,
+        brand_name: str = "",
+        niche_hint: str = "",
         language: str = "English",
     ) -> BrandEnrichmentOutput:
         context = {
+            "brand_name_input": brand_name.strip() or None,
+            "niche_hint": niche_hint.strip() or None,
             "scraped_website": (
                 {
                     "url": scraped.website_url,
@@ -394,7 +398,8 @@ class AICopilotService:
             "preferred_language": language,
         }
         prompt = (
-            "Analyze the brand signals below and build a sharp Instagram Brand Kit. "
+            "Analyze ONLY the brand signals provided below and build a sharp, accurate Brand Kit specifically tailored "
+            "for this exact brand/company (never assume AI or software unless the brand itself is in software/AI). "
             "Recommend a realistic `posting_goal_per_week` (between 3 and 7 for most brands).\n"
             f"Signals: {json.dumps(context)}"
         )
