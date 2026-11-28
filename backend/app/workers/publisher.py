@@ -351,4 +351,16 @@ async def sync_all_active_accounts(
                 synced += 1
             except Exception as exc:
                 errors.append(f"@{fresh_acc.username}: {exc}")
-    return {"synced_accounts": synced, "refreshed_tokens": refreshed_tokens, "errors": errors}
+
+    from app.services.google_business_service import sync_all_active_gbp_profiles
+
+    gbp_res = await sync_all_active_gbp_profiles(
+        session_factory, cipher=tok_cipher, settings=cfg
+    )
+    return {
+        "synced_accounts": synced,
+        "refreshed_tokens": refreshed_tokens,
+        "gbp_synced": gbp_res["synced_profiles"],
+        "gbp_auto_replied": gbp_res["auto_replied"],
+        "errors": [*errors, *gbp_res["errors"]],
+    }

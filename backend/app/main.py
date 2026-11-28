@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api.routes import ai, analytics, auth, health, onboarding, posts
+from app.api.routes import ai, analytics, auth, google_business, health, onboarding, posts
 from app.core.config import get_settings
 from app.core.database import dispose_db, get_session_factory, init_db
 from app.workers.publisher import process_due_posts, sync_all_active_accounts
@@ -82,3 +82,4 @@ app.include_router(onboarding.router)
 app.include_router(analytics.router)
 app.include_router(ai.router)
 app.include_router(posts.router)
+app.include_router(google_business.router)

@@ -13,6 +13,7 @@ import {
   LayoutDashboard,
   Rocket,
   Sparkles,
+  Store,
   X,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -192,6 +193,7 @@ export function Navbar({
     { href: "/onboarding", label: "Setup & Brand", icon: Rocket },
     { href: "/dashboard", label: "Analytics & Best Times", icon: LayoutDashboard },
     { href: "/planner", label: "Smart Planner", icon: Calendar },
+    { href: "/google-business", label: "Google Business", icon: Store },
   ];
 
   return (

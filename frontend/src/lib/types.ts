@@ -30,6 +30,95 @@ export interface InstagramAccount {
   token_expires_at: string | null;
 }
 
+export interface GoogleBusinessProfileSummary {
+  id: string;
+  brand_id: string | null;
+  google_email: string;
+  gbp_account_name: string;
+  location_name: string;
+  location_id: string;
+  title: string;
+  store_code?: string;
+  primary_category: string;
+  website_uri: string;
+  phone_number: string;
+  address_summary: string;
+  timezone: string;
+  average_rating?: number;
+  total_review_count?: number;
+  auto_reply_enabled: boolean;
+  auto_reply_min_stars: number;
+  last_synced_at: string | null;
+  last_sync_error: string;
+}
+
+export interface GoogleBusinessReviewItem {
+  id: string;
+  review_id: string;
+  reviewer_name: string;
+  reviewer_photo_url: string;
+  star_rating: number;
+  comment: string;
+  review_created_at: string | null;
+  review_updated_at: string | null;
+  reply_comment: string;
+  reply_updated_at: string | null;
+  ai_suggested_reply: string;
+  reply_status: "UNREPLIED" | "DRAFT_READY" | "AUTO_REPLIED" | "REPLIED";
+}
+
+export interface GoogleBusinessOverview {
+  profile: GoogleBusinessProfileSummary;
+  kpis: {
+    impressions_30d: number;
+    impressions_prev_30d: number;
+    impressions_growth_pct: number | null;
+    search_impressions_30d: number;
+    maps_impressions_30d: number;
+    search_share_pct: number;
+    maps_share_pct: number;
+    actions_30d: number;
+    actions_prev_30d: number;
+    actions_growth_pct: number | null;
+    website_clicks_30d: number;
+    website_clicks_growth_pct: number | null;
+    call_clicks_30d: number;
+    call_clicks_growth_pct: number | null;
+    direction_requests_30d: number;
+    direction_requests_growth_pct: number | null;
+    action_conversion_rate_pct: number;
+    average_rating: number;
+    total_review_count: number;
+    synced_review_count: number;
+    replied_review_count: number;
+    unreplied_review_count: number;
+    critical_unreplied_count: number;
+    response_rate_pct: number;
+    positive_share_pct: number;
+    median_reply_hours: number | null;
+    rating_delta_30d: number | null;
+    local_health_score: number;
+  };
+  formulas: Record<
+    string,
+    {
+      label: string;
+      formula: string;
+      inputs: Record<string, number | string>;
+      result: number | null;
+    }
+  >;
+  daily_trend: Array<{
+    date: string;
+    impressions: number;
+    actions: number;
+    website_clicks: number;
+    call_clicks: number;
+    direction_requests: number;
+  }>;
+  reviews: GoogleBusinessReviewItem[];
+}
+
 export interface BestTimeWindow {
   day_of_week: number;
   day_name: string;

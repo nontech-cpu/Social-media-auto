@@ -312,3 +312,98 @@ class MediaAsset(Base):
     height: Mapped[int | None] = mapped_column(Integer, nullable=True)
     duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class GoogleBusinessProfile(Base):
+    __tablename__ = "google_business_profiles"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    brand_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("brand_profiles.id", ondelete="SET NULL"), nullable=True
+    )
+    google_email: Mapped[str] = mapped_column(String(255), default="")
+    gbp_account_name: Mapped[str] = mapped_column(String(160), default="")
+    location_name: Mapped[str] = mapped_column(String(200), unique=True, index=True)
+    location_id: Mapped[str] = mapped_column(String(120), index=True)
+    title: Mapped[str] = mapped_column(String(255), default="")
+    store_code: Mapped[str] = mapped_column(String(120), default="")
+    primary_category: Mapped[str] = mapped_column(String(160), default="")
+    website_uri: Mapped[str] = mapped_column(String(500), default="")
+    phone_number: Mapped[str] = mapped_column(String(64), default="")
+    address_summary: Mapped[str] = mapped_column(String(500), default="")
+    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    average_rating: Mapped[float] = mapped_column(Float, default=0.0)
+    total_review_count: Mapped[int] = mapped_column(Integer, default=0)
+    auto_reply_enabled: Mapped[bool] = mapped_column(default=False)
+    auto_reply_min_stars: Mapped[int] = mapped_column(Integer, default=4)
+    encrypted_access_token: Mapped[str] = mapped_column(Text, default="")
+    encrypted_refresh_token: Mapped[str] = mapped_column(Text, default="")
+    token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_sync_error: Mapped[str] = mapped_column(Text, default="")
+    is_active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    reviews: Mapped[list["GoogleBusinessReview"]] = relationship(
+        back_populates="profile", cascade="all, delete-orphan"
+    )
+    daily_metrics: Mapped[list["GoogleBusinessDailyMetric"]] = relationship(
+        back_populates="profile", cascade="all, delete-orphan"
+    )
+
+
+class GoogleBusinessReview(Base):
+    __tablename__ = "google_business_reviews"
+    __table_args__ = (
+        UniqueConstraint("profile_id", "review_id", name="uq_gbp_profile_review"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    profile_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("google_business_profiles.id", ondelete="CASCADE"), index=True
+    )
+    review_id: Mapped[str] = mapped_column(String(160), index=True)
+    review_resource_name: Mapped[str] = mapped_column(String(360), default="")
+    reviewer_name: Mapped[str] = mapped_column(String(200), default="Google User")
+    reviewer_photo_url: Mapped[str] = mapped_column(String(1000), default="")
+    star_rating: Mapped[int] = mapped_column(Integer, default=5)
+    comment: Mapped[str] = mapped_column(Text, default="")
+    review_created_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    reply_comment: Mapped[str] = mapped_column(Text, default="")
+    reply_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ai_suggested_reply: Mapped[str] = mapped_column(Text, default="")
+    reply_status: Mapped[str] = mapped_column(
+        String(32), default="UNREPLIED", index=True
+    )  # UNREPLIED | DRAFT_READY | AUTO_REPLIED | REPLIED
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    profile: Mapped[GoogleBusinessProfile] = relationship(back_populates="reviews")
+
+
+class GoogleBusinessDailyMetric(Base):
+    __tablename__ = "google_business_daily_metrics"
+    __table_args__ = (
+        UniqueConstraint("profile_id", "metric_date", name="uq_gbp_profile_date"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    profile_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("google_business_profiles.id", ondelete="CASCADE"), index=True
+    )
+    metric_date: Mapped[str] = mapped_column(String(10), index=True)  # YYYY-MM-DD
+    impressions_search_desktop: Mapped[int] = mapped_column(Integer, default=0)
+    impressions_search_mobile: Mapped[int] = mapped_column(Integer, default=0)
+    impressions_maps_desktop: Mapped[int] = mapped_column(Integer, default=0)
+    impressions_maps_mobile: Mapped[int] = mapped_column(Integer, default=0)
+    website_clicks: Mapped[int] = mapped_column(Integer, default=0)
+    call_clicks: Mapped[int] = mapped_column(Integer, default=0)
+    direction_requests: Mapped[int] = mapped_column(Integer, default=0)
+    total_impressions: Mapped[int] = mapped_column(Integer, default=0)
+    total_actions: Mapped[int] = mapped_column(Integer, default=0)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    profile: Mapped[GoogleBusinessProfile] = relationship(back_populates="daily_metrics")

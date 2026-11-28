@@ -10,6 +10,7 @@ from app.services.ai_copilot import (
     CopilotChatAction,
     GeneratedPostPackage,
 )
+from app.services.google_business_service import ReviewReplyOutput
 from app.services.hashtag_engine import HashtagDiscoveryResult
 from app.services.recommendation_engine import DynamicNichePriorSchema
 
@@ -21,6 +22,7 @@ def test_all_gemini_response_schemas_are_valid() -> None:
         AccountAuditOutput,
         GeneratedPostPackage,
         CopilotChatAction,
+        ReviewReplyOutput,
         HashtagDiscoveryResult,
         DynamicNichePriorSchema,
     ]

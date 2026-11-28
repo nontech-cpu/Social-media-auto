@@ -16,6 +16,8 @@ from app.core.security import get_token_cipher
 from app.models.entities import (
     BrandProfile,
     CopilotMessage,
+    GoogleBusinessProfile,
+    GoogleBusinessReview,
     InstagramAccount,
     MediaAsset,
     ScheduledPost,
@@ -27,6 +29,12 @@ from app.services.gemini_helper import (
     generate_structured_content,
     generate_structured_with_usage,
     record_ai_usage,
+)
+from app.services.google_business_client import GoogleBusinessClient
+from app.services.google_business_service import (
+    build_gbp_overview,
+    ensure_valid_gbp_token,
+    generate_polite_review_reply,
 )
 from app.services.hashtag_engine import HashtagCandidate, HashtagEngine
 from app.services.meta_client import MetaGraphClient
@@ -268,6 +276,35 @@ _COPILOT_TOOLS: list[types.Tool] = [
                     "Call this when user asks for strategy/audit advice or hashtag recommendations."
                 ),
                 parameters=types.Schema(type=types.Type.OBJECT, properties={}),
+            ),
+            types.FunctionDeclaration(
+                name="get_gbp_insights_and_reviews",
+                description=(
+                    "Fetch connected Google Business Profile KPIs (30d views, calls, website clicks, direction requests), "
+                    "period-over-period growth rates, action conversion rate, exact calculation formulas, and latest customer reviews."
+                ),
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "unreplied_only": types.Schema(type=types.Type.BOOLEAN),
+                        "limit": types.Schema(type=types.Type.INTEGER),
+                    },
+                ),
+            ),
+            types.FunctionDeclaration(
+                name="reply_to_gbp_review",
+                description=(
+                    "Draft or publish a warm, humble, polite reply to a Google Business customer review. "
+                    "Set publish_now=true ONLY when user asks to post/send the reply live on Google."
+                ),
+                parameters=types.Schema(
+                    type=types.Type.OBJECT,
+                    properties={
+                        "review_id": types.Schema(type=types.Type.STRING),
+                        "custom_instruction": types.Schema(type=types.Type.STRING),
+                        "publish_now": types.Schema(type=types.Type.BOOLEAN),
+                    },
+                ),
             ),
             types.FunctionDeclaration(
                 name="complete_response",
@@ -675,6 +712,7 @@ class AICopilotService:
                 ensure_overview=_ensure_overview,
                 ensure_slots=_ensure_slots,
                 available_media=available_media,
+                db=db,
             )
             turn_cache["tool_results"][tool_name] = result
             return result
@@ -704,7 +742,8 @@ class AICopilotService:
             "3. Explain insights in plain everyday creator words — NEVER use developer/math jargon like 'Bayesian', 'UCB', 'MAD outlier', 'n_eff', or 'dynamic_niche_prior'.\n"
             "4. `proposed_caption` MUST be in `caption_language` unless user asks for another caption language.\n\n"
             "MEDIA MEMORY, TOOL & ACTION RULES:\n"
-            "- NEVER guess post statuses, metrics, or slots — call `get_recent_posts`, `get_analytics_summary`, `get_best_time_slots`, or `get_account_audit_and_hashtags` when data is needed.\n"
+            "- NEVER guess post statuses, metrics, or slots — call `get_recent_posts`, `get_analytics_summary`, `get_best_time_slots`, `get_account_audit_and_hashtags`, `get_gbp_insights_and_reviews`, or `reply_to_gbp_review` when data is needed.\n"
+            "- When user asks about Google Business Profile (latest reviews, rating, growth rates, calls/directions, exact metric formulas, or replying politely to reviews), call `get_gbp_insights_and_reviews` or `reply_to_gbp_review`.\n"
             "- `available_media` lists uploaded photos/videos persistently across turns (`M1`, `M2`, ... with `.mp4`/`.jpg` & status). When user asks about previously sent files (e.g. '2 media', '.mp4 video'), check `available_media` or call `get_recent_posts`.\n"
             "- ONLY set `requested_action='schedule'` or `'publish_now'` when user explicitly commands scheduling/posting. If user is asking about/clarifying uploaded media, set `requested_action='chat'`.\n"
             "- When user selects/schedules specific uploaded file(s) (e.g. 'post the mp4 video'), set `selected_media_refs=['M1']` matching exact ref(s) from `available_media`.\n"
@@ -1193,6 +1232,7 @@ class AICopilotService:
         ensure_overview: Any,
         ensure_slots: Any,
         available_media: list[dict[str, Any]] | None = None,
+        db: AsyncSession | None = None,
     ) -> dict[str, Any]:
         """Dispatch Level 3 on-demand Copilot data tools cleanly without loading unused context."""
         if tool_name == "get_recent_posts":
@@ -1317,4 +1357,221 @@ class AICopilotService:
                 ],
             }
 
+        if tool_name == "get_gbp_insights_and_reviews" and db is not None:
+            profiles = (
+                await db.execute(
+                    select(GoogleBusinessProfile)
+                    .where(GoogleBusinessProfile.is_active.is_(True))
+                    .order_by(GoogleBusinessProfile.created_at.desc())
+                    .limit(3)
+                )
+            ).scalars().all()
+            if not profiles:
+                return {"connected": False, "message": "No Google Business Profile is connected yet."}
+            unreplied_only = bool(args.get("unreplied_only", False))
+            limit = max(1, min(int(args.get("limit") or 10), 20))
+            ov = await build_gbp_overview(db, profiles[0])
+            revs = ov["reviews"]
+            if unreplied_only:
+                revs = [r for r in revs if not r["reply_comment"]]
+            return {
+                "connected": True,
+                "profile": {
+                    "id": ov["profile"]["id"],
+                    "title": ov["profile"]["title"],
+                    "category": ov["profile"]["primary_category"],
+                    "google_email": ov["profile"]["google_email"],
+                    "auto_reply_enabled": ov["profile"]["auto_reply_enabled"],
+                    "auto_reply_min_stars": ov["profile"]["auto_reply_min_stars"],
+                },
+                "kpis": ov["kpis"],
+                "formulas": ov["formulas"],
+                "reviews": revs[:limit],
+            }
+
+        if tool_name == "reply_to_gbp_review" and db is not None:
+            profiles = (
+                await db.execute(
+                    select(GoogleBusinessProfile)
+                    .where(GoogleBusinessProfile.is_active.is_(True))
+                    .order_by(GoogleBusinessProfile.created_at.desc())
+                    .limit(1)
+                )
+            ).scalars().all()
+            if not profiles:
+                return {"ok": False, "error": "No Google Business Profile connected."}
+            prof = profiles[0]
+            rev_id_arg = str(args.get("review_id") or "").strip()
+            rev_row = None
+            if rev_id_arg:
+                rev_row = (
+                    await db.execute(
+                        select(GoogleBusinessReview).where(
+                            GoogleBusinessReview.profile_id == prof.id,
+                            (GoogleBusinessReview.id == rev_id_arg)
+                            | (GoogleBusinessReview.review_id == rev_id_arg),
+                        )
+                    )
+                ).scalar_one_or_none()
+            if rev_row is None:
+                rev_row = (
+                    await db.execute(
+                        select(GoogleBusinessReview)
+                        .where(
+                            GoogleBusinessReview.profile_id == prof.id,
+                            GoogleBusinessReview.reply_comment == "",
+                        )
+                        .order_by(GoogleBusinessReview.review_updated_at.desc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+            if rev_row is None:
+                return {"ok": False, "error": "No matching or unreplied review found."}
+
+            custom_instr = str(args.get("custom_instruction") or "").strip()
+            publish_now = bool(args.get("publish_now", False))
+            draft = await generate_polite_review_reply(
+                db,
+                settings=self.settings,
+                profile=prof,
+                review=rev_row,
+                brand=brand,
+                custom_instruction=custom_instr,
+            )
+            rev_row.ai_suggested_reply = draft["reply_text"]
+            if publish_now:
+                gbp_client = GoogleBusinessClient(self.settings)
+                cipher = get_token_cipher()
+                token = await ensure_valid_gbp_token(db, prof, client=gbp_client, cipher=cipher)
+                await gbp_client.put_review_reply(
+                    token, rev_row.review_resource_name, draft["reply_text"]
+                )
+                rev_row.reply_comment = draft["reply_text"]
+                rev_row.reply_updated_at = datetime.now(timezone.utc)
+                rev_row.reply_status = "REPLIED"
+            elif rev_row.reply_status == "UNREPLIED":
+                rev_row.reply_status = "DRAFT_READY"
+            await db.commit()
+            return {
+                "ok": True,
+                "published_live": publish_now,
+                "reviewer_name": rev_row.reviewer_name,
+                "star_rating": rev_row.star_rating,
+                "reply_text": draft["reply_text"],
+                "tone_note": draft["tone_note"],
+            }
+
         return {"error": f"Unknown tool: {tool_name}"}
+
+    async def chat_with_gbp_copilot(
+        self,
+        db: AsyncSession,
+        profile: GoogleBusinessProfile,
+        brand: BrandProfile | None,
+        user_message: str,
+    ) -> dict[str, Any]:
+        """Focused AI Copilot for Google Business Profile reviews, growth metrics, formulas, and replies."""
+        ov = await build_gbp_overview(db, profile)
+        strict_lang = _detect_message_language_rule(user_message)
+        static_sys = (
+            "You are SocialMediaAI's Google Business Profile Specialist Copilot.\n"
+            f"Business Profile: {json.dumps(ov['profile'])}\n\n"
+            "RULES:\n"
+            "1. Match ONLY Latest User Message's language (English->pure English, Hinglish->Hinglish, German->German, etc.).\n"
+            "2. Answer concisely and proportionally (no filler): cite exact numbers from `kpis`, exact `formulas` when asked how metrics are calculated, and real `reviews`.\n"
+            "3. When replying to reviews or asked to reply, use `reply_to_gbp_review` with warm, humble, non-defensive hospitality tone."
+        )
+        context_payload = {
+            "kpis": ov["kpis"],
+            "formulas": ov["formulas"],
+            "reviews": ov["reviews"][:12],
+        }
+        gbp_tools = [
+            types.Tool(
+                function_declarations=[
+                    fd
+                    for fd in _COPILOT_TOOLS[0].function_declarations
+                    if fd.name in ("get_gbp_insights_and_reviews", "reply_to_gbp_review")
+                ]
+            )
+        ]
+
+        async def _gbp_exec(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+            if tool_name == "get_gbp_insights_and_reviews":
+                return context_payload
+            if tool_name == "reply_to_gbp_review":
+                rev_id_arg = str(args.get("review_id") or "").strip()
+                rev_row = None
+                if rev_id_arg:
+                    rev_row = (
+                        await db.execute(
+                            select(GoogleBusinessReview).where(
+                                GoogleBusinessReview.profile_id == profile.id,
+                                (GoogleBusinessReview.id == rev_id_arg)
+                                | (GoogleBusinessReview.review_id == rev_id_arg),
+                            )
+                        )
+                    ).scalar_one_or_none()
+                if rev_row is None:
+                    rev_row = (
+                        await db.execute(
+                            select(GoogleBusinessReview)
+                            .where(
+                                GoogleBusinessReview.profile_id == profile.id,
+                                GoogleBusinessReview.reply_comment == "",
+                            )
+                            .order_by(GoogleBusinessReview.review_updated_at.desc())
+                            .limit(1)
+                        )
+                    ).scalar_one_or_none()
+                if rev_row is None:
+                    return {"ok": False, "error": "No unreplied review found."}
+                draft = await generate_polite_review_reply(
+                    db,
+                    settings=self.settings,
+                    profile=profile,
+                    review=rev_row,
+                    brand=brand,
+                    custom_instruction=str(args.get("custom_instruction") or ""),
+                )
+                rev_row.ai_suggested_reply = draft["reply_text"]
+                pub = bool(args.get("publish_now", False))
+                if pub:
+                    c = GoogleBusinessClient(self.settings)
+                    tok = await ensure_valid_gbp_token(
+                        db, profile, client=c, cipher=get_token_cipher()
+                    )
+                    await c.put_review_reply(tok, rev_row.review_resource_name, draft["reply_text"])
+                    rev_row.reply_comment = draft["reply_text"]
+                    rev_row.reply_updated_at = datetime.now(timezone.utc)
+                    rev_row.reply_status = "REPLIED"
+                elif rev_row.reply_status == "UNREPLIED":
+                    rev_row.reply_status = "DRAFT_READY"
+                await db.commit()
+                return {
+                    "ok": True,
+                    "published_live": pub,
+                    "reviewer_name": rev_row.reviewer_name,
+                    "star_rating": rev_row.star_rating,
+                    "reply_text": draft["reply_text"],
+                }
+            return {"error": f"Unknown tool: {tool_name}"}
+
+        _, plain_reply, usage = await generate_agent_turn_with_tools(
+            self.settings,
+            system_instruction=static_sys,
+            user_text=(
+                f"GBP Overview JSON: {json.dumps(context_payload)}\n"
+                f"Latest User Message: {user_message}\n"
+                f"Mandatory Reply Language Lock: {strict_lang}"
+            ),
+            tools=gbp_tools,
+            tool_executor=_gbp_exec,
+            temperature=0.35,
+        )
+        record_ai_usage(db, account_id=None, feature="gbp_copilot_chat", usage=usage)
+        await db.commit()
+        return {
+            "reply": plain_reply or "I reviewed your Google Business Profile data.",
+            "token_usage": usage,
+        }

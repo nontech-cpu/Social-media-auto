@@ -4,6 +4,8 @@ import type {
   BrandProfile,
   CopilotMessage,
   GeneratedPostPackage,
+  GoogleBusinessOverview,
+  GoogleBusinessProfileSummary,
   InstagramAccount,
   PublishActivityEvent,
   ScheduledPost,
@@ -44,6 +46,7 @@ export const api = {
       environment: string;
       media_storage_provider: string;
       meta_configured: boolean;
+      google_business_configured?: boolean;
       gemini_configured: boolean;
     }>("/api/health"),
 
@@ -80,6 +83,94 @@ export const api = {
     }),
   disconnectAccount: (accountId: string) =>
     apiRequest<{ deleted: boolean }>(`/api/auth/accounts/${accountId}`, { method: "DELETE" }),
+
+  // Google Business Profile OAuth, Sync, Reviews & AI Replies
+  getGoogleBusinessOAuthUrl: (brandId = "", timezoneName?: string) => {
+    const tz =
+      timezoneName ||
+      (typeof Intl !== "undefined"
+        ? Intl.DateTimeFormat().resolvedOptions().timeZone
+        : "UTC") ||
+      "UTC";
+    return apiRequest<{ oauth_url: string; state: string }>(
+      `/api/auth/google-business/url?brand_id=${encodeURIComponent(brandId)}&timezone_name=${encodeURIComponent(tz)}`
+    );
+  },
+  listGoogleBusinessProfiles: () =>
+    apiRequest<{ profiles: GoogleBusinessProfileSummary[] }>("/api/google-business/profiles"),
+  syncGoogleBusinessProfile: (profileId: string) =>
+    apiRequest<{
+      synced: boolean;
+      synced_days: number;
+      synced_reviews: number;
+      auto_replied: number;
+      drafts_prepared: number;
+      warnings: string[];
+    }>(`/api/google-business/${profileId}/sync`, { method: "POST" }),
+  getGoogleBusinessOverview: (profileId: string) =>
+    apiRequest<GoogleBusinessOverview>(`/api/google-business/${profileId}/overview`),
+  updateGoogleBusinessSettings: (
+    profileId: string,
+    patch: Partial<{
+      auto_reply_enabled: boolean;
+      auto_reply_min_stars: number;
+      timezone: string;
+    }>
+  ) =>
+    apiRequest<{
+      id: string;
+      auto_reply_enabled: boolean;
+      auto_reply_min_stars: number;
+      timezone: string;
+    }>(`/api/google-business/${profileId}/settings`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  draftGoogleBusinessReviewReply: (
+    profileId: string,
+    reviewId: string,
+    custom_instruction = ""
+  ) =>
+    apiRequest<{ reply_text: string; tone_note: string }>(
+      `/api/google-business/${profileId}/reviews/${reviewId}/draft-reply`,
+      {
+        method: "POST",
+        body: JSON.stringify({ custom_instruction }),
+      }
+    ),
+  publishGoogleBusinessReviewReply: (
+    profileId: string,
+    reviewId: string,
+    reply_text: string
+  ) =>
+    apiRequest<{
+      id: string;
+      reply_comment: string;
+      reply_status: string;
+      reply_updated_at: string;
+    }>(`/api/google-business/${profileId}/reviews/${reviewId}/reply`, {
+      method: "POST",
+      body: JSON.stringify({ reply_text }),
+    }),
+  chatGoogleBusinessCopilot: (profileId: string, message: string) =>
+    apiRequest<{
+      reply: string;
+      token_usage?: {
+        model: string;
+        prompt_tokens: number;
+        output_tokens: number;
+        cached_tokens?: number;
+        total_tokens: number;
+        tool_calls?: string[];
+      };
+    }>(`/api/google-business/${profileId}/chat`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    }),
+  disconnectGoogleBusinessProfile: (profileId: string) =>
+    apiRequest<{ deleted: boolean }>(`/api/google-business/${profileId}`, {
+      method: "DELETE",
+    }),
 
   // Analytics & Audit
   syncAccount: (accountId: string) =>

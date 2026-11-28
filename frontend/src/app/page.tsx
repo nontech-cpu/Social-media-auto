@@ -9,11 +9,15 @@ export default function HomePage() {
   const router = useRouter();
 
   useEffect(() => {
-    api
-      .listAccounts()
-      .then(({ accounts }) => {
+    Promise.all([
+      api.listAccounts().catch(() => ({ accounts: [] })),
+      api.listGoogleBusinessProfiles().catch(() => ({ profiles: [] })),
+    ])
+      .then(([{ accounts }, { profiles }]) => {
         if (accounts.length > 0) {
           router.replace("/planner");
+        } else if (profiles.length > 0) {
+          router.replace("/google-business");
         } else {
           router.replace("/onboarding");
         }

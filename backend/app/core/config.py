@@ -39,6 +39,14 @@ class Settings(BaseSettings):
         "instagram_content_publish,pages_show_list,pages_read_engagement,business_management"
     )
 
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_gbp_redirect_uri: str = "http://localhost:8000/api/auth/google-business/callback"
+    google_gbp_scopes: str = (
+        "https://www.googleapis.com/auth/business.manage openid email profile"
+    )
+    gbp_auto_reply_min_stars: int = Field(default=4, ge=1, le=5)
+
     gemini_api_key: str = ""
     gemini_model: str = "gemini-3.5-flash-lite"
     gemini_fallback_models: str = "gemini-3-flash-preview,gemini-3.1-flash-lite,gemini-3.8-flash,gemini-3.6-flash,gemini-3.7-flash"

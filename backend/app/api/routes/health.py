@@ -19,6 +19,9 @@ async def healthcheck() -> dict:
         "environment": settings.app_env,
         "media_storage_provider": settings.media_storage_provider,
         "meta_configured": bool(settings.meta_app_id and settings.meta_app_secret),
+        "google_business_configured": bool(
+            settings.google_client_id and settings.google_client_secret
+        ),
         "gemini_configured": bool(settings.gemini_api_key),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
