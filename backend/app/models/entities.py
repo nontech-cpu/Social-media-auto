@@ -295,3 +295,20 @@ class AIUsageLog(Base):
     cached_tokens: Mapped[int] = mapped_column(Integer, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class MediaAsset(Base):
+    __tablename__ = "media_assets"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("instagram_accounts.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    url: Mapped[str] = mapped_column(String(1500), index=True)
+    media_type: Mapped[str] = mapped_column(String(24), default="IMAGE")
+    filename: Mapped[str] = mapped_column(String(260), default="")
+    file_ext: Mapped[str] = mapped_column(String(16), default="")
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)

@@ -777,6 +777,82 @@ async def test_generate_agent_turn_with_tools_uses_user_role_for_function_respon
     assert all(r in ("user", "model") for roles, _ in captured_turns for r in roles)
 
 
+@pytest.mark.asyncio
+async def test_collect_available_media_assets_survives_many_text_turns(
+    db_session, test_settings, cipher
+) -> None:
+    from zoneinfo import ZoneInfo
+    from app.models.entities import CopilotMessage, MediaAsset
+    from app.services.ai_copilot import AICopilotService, _infer_media_ext_and_kind
+
+    ext_v, kind_v = _infer_media_ext_and_kind("https://res.cloudinary.com/demo/video/upload/clip.mp4")
+    ext_i, kind_i = _infer_media_ext_and_kind("https://res.cloudinary.com/demo/image/upload/pic.jpg")
+    assert (ext_v, kind_v) == (".mp4", "video")
+    assert (ext_i, kind_i) == (".jpg", "image")
+
+    account = InstagramAccount(
+        ig_user_id="178414004422",
+        username="media_mem_user",
+        timezone="UTC",
+        encrypted_access_token=cipher.encrypt("tok"),
+    )
+    db_session.add(account)
+    await db_session.flush()
+
+    now = datetime.now(timezone.utc)
+    db_session.add(
+        MediaAsset(
+            account_id=account.id,
+            url="https://res.cloudinary.com/demo/video/upload/demo_reel.mp4",
+            media_type="REELS",
+            filename="demo_reel.mp4",
+            file_ext=".mp4",
+            created_at=now - timedelta(minutes=30),
+        )
+    )
+    db_session.add(
+        CopilotMessage(
+            account_id=account.id,
+            role="user",
+            content="Here is my photo",
+            structured_payload_json={
+                "media_urls": ["https://res.cloudinary.com/demo/image/upload/first_pic.jpg"],
+                "media_type": "IMAGE",
+            },
+            created_at=now - timedelta(minutes=25),
+        )
+    )
+    # Add 14 text-only turns AFTER both media uploads (exceeds old limit=10 window)
+    for i in range(14):
+        db_session.add(
+            CopilotMessage(
+                account_id=account.id,
+                role="user" if i % 2 == 0 else "assistant",
+                content=f"Chatter message #{i}",
+                structured_payload_json=None,
+                created_at=now - timedelta(minutes=20 - i),
+            )
+        )
+    await db_session.commit()
+
+    svc = AICopilotService(test_settings)
+    ctx = await svc.collect_available_media_assets(
+        db_session,
+        account=account,
+        tz=ZoneInfo("UTC"),
+        attached_urls=[],
+        attached_media_type="",
+    )
+    assets = ctx["available_media"]
+    assert len(assets) == 2
+    urls = {a["url"]: a for a in assets}
+    assert urls["https://res.cloudinary.com/demo/video/upload/demo_reel.mp4"]["ext"] == ".mp4"
+    assert urls["https://res.cloudinary.com/demo/video/upload/demo_reel.mp4"]["kind"] == "video"
+    assert urls["https://res.cloudinary.com/demo/image/upload/first_pic.jpg"]["ext"] == ".jpg"
+    assert urls["https://res.cloudinary.com/demo/image/upload/first_pic.jpg"]["kind"] == "image"
+
+
+
 
 
 

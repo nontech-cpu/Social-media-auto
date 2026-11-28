@@ -116,7 +116,7 @@ export function CopilotDrawer({
       const warnings: string[] = [];
       let detected: "REELS" | "IMAGE" | "CAROUSEL" = "IMAGE";
       for (const f of fileArray) {
-        const res = await api.uploadMedia(f);
+        const res = await api.uploadMedia(f, undefined, account.id);
         urls.push(res.url);
         if (res.warnings?.length) warnings.push(...res.warnings);
         detected = res.media_type;

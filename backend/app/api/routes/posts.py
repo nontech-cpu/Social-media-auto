@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.security import get_token_cipher
-from app.models.entities import BrandProfile, InstagramAccount, ScheduledPost
+from app.models.entities import BrandProfile, InstagramAccount, MediaAsset, ScheduledPost
 from app.services.media_storage import MediaStorageService
 from app.services.meta_client import MetaGraphClient
 from app.services.queue_planner import recommend_slots_for_batch
@@ -81,6 +81,8 @@ def _serialize_post(post: ScheduledPost) -> dict:
 async def upload_media_file(
     file: UploadFile = File(...),
     target_format: Literal["", "IMAGE", "REELS", "CAROUSEL", "STORIES"] = Query(default=""),
+    account_id: str = Query(default=""),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     data = await file.read()
     service = MediaStorageService(get_settings())
@@ -96,7 +98,33 @@ async def upload_media_file(
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    clean_name = uploaded.filename or "upload"
+    ext = (
+        "." + clean_name.rsplit(".", 1)[-1].lower()[:12]
+        if "." in clean_name
+        else (".mp4" if uploaded.media_type == "REELS" else ".jpg")
+    )
+    resolved_account_id = None
+    if account_id.strip():
+        acct = await db.get(InstagramAccount, account_id.strip())
+        if acct is not None:
+            resolved_account_id = acct.id
+
+    asset = MediaAsset(
+        account_id=resolved_account_id,
+        url=uploaded.url,
+        media_type=uploaded.media_type,
+        filename=clean_name[:260],
+        file_ext=ext,
+        width=uploaded.width,
+        height=uploaded.height,
+        duration_seconds=uploaded.duration_seconds,
+    )
+    db.add(asset)
+    await db.commit()
+
     return {
+        "asset_id": asset.id,
         "url": uploaded.url,
         "media_type": uploaded.media_type,
         "filename": uploaded.filename,

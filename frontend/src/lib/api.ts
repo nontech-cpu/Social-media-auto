@@ -95,11 +95,20 @@ export const api = {
     }),
 
   // Media Upload
-  uploadMedia: async (file: File, targetFormat?: "IMAGE" | "REELS" | "CAROUSEL" | "STORIES") => {
+  uploadMedia: async (
+    file: File,
+    targetFormat?: "IMAGE" | "REELS" | "CAROUSEL" | "STORIES",
+    accountId?: string
+  ) => {
     const form = new FormData();
     form.append("file", file);
-    const query = targetFormat ? `?target_format=${encodeURIComponent(targetFormat)}` : "";
+    const params = new URLSearchParams();
+    if (targetFormat) params.set("target_format", targetFormat);
+    if (accountId) params.set("account_id", accountId);
+    const qs = params.toString();
+    const query = qs ? `?${qs}` : "";
     return apiRequest<{
+      asset_id?: string;
       url: string;
       media_type: "IMAGE" | "REELS";
       filename: string;

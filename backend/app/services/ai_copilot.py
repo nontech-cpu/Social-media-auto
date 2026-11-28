@@ -13,7 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
 from app.core.security import get_token_cipher
-from app.models.entities import BrandProfile, CopilotMessage, InstagramAccount, ScheduledPost
+from app.models.entities import (
+    BrandProfile,
+    CopilotMessage,
+    InstagramAccount,
+    MediaAsset,
+    ScheduledPost,
+)
 from app.services.analytics_engine import build_analytics_overview
 from app.services.brand_scraper import ScrapedBrand
 from app.services.gemini_helper import (
@@ -64,16 +70,23 @@ class GeneratedPostPackage(BaseModel):
 
 class CopilotChatAction(BaseModel):
     reply: str = Field(
-        description="Helpful, concise answer STRICTLY in the exact language of the Latest User Message (pure English if English, German if German, Hinglish only if user wrote Hinglish)"
+        description=(
+            "Proportional, crisp answer matching ONLY what the user asked (no fluff/filler, not too terse), "
+            "STRICTLY in the exact language of the Latest User Message"
+        )
     )
     requested_action: str = Field(
-        description="chat | draft | schedule | publish_now — use 'schedule' ONLY when user confirms scheduling, 'publish_now' ONLY when user asks to post immediately"
+        description="chat | draft | schedule | publish_now — use 'schedule' ONLY when user explicitly commands scheduling, 'publish_now' ONLY when user explicitly commands immediate posting"
     )
     requested_scheduled_for_iso: str = Field(
         description="ISO-8601 datetime with timezone offset if user specified a custom date/time (e.g. 2026-11-26T15:36:00+05:30), 'best' if bot should pick optimal slot, or empty string"
     )
     use_previous_draft: bool = Field(
         description="True if user refers to the previously drafted/attached post, caption, hashtags, or media"
+    )
+    selected_media_refs: list[str] = Field(
+        default_factory=list,
+        description="Asset refs like ['M1'] from available_media when user picks/schedules specific uploaded media (e.g. the .mp4 video)",
     )
     proposed_caption: str = Field(
         description="Ready-to-publish caption if drafting/updating a post, otherwise empty string"
@@ -88,6 +101,23 @@ class CopilotChatAction(BaseModel):
     batch_topics: list[str] = Field(
         description="List of post topics if user wants multiple posts planned/queued, else empty list"
     )
+
+
+def _infer_media_ext_and_kind(
+    url: str, filename: str = "", media_type: str = ""
+) -> tuple[str, str]:
+    """Infer file extension and media kind ('video' | 'image') cleanly without regex."""
+    candidate = (filename or url.split("?")[0]).strip().lower()
+    ext = ""
+    if "." in candidate:
+        raw_ext = "." + candidate.rsplit(".", 1)[-1]
+        if len(raw_ext) <= 8:
+            ext = raw_ext
+    video_exts = (".mp4", ".mov", ".m4v", ".webm")
+    is_video = ext in video_exts or "/video/" in url.lower() or media_type == "REELS"
+    if not ext:
+        ext = ".mp4" if is_video else ".jpg"
+    return ext, ("video" if is_video else "image")
 
 
 _HINGLISH_MARKERS = frozenset(
@@ -182,7 +212,6 @@ def _needs_structured_action_fallback(text: str, attached_urls: list[str]) -> bo
         "hashtag",
         "story",
         "stories",
-        "slot",
         "best time",
         "daal",
         "lagao",
@@ -201,8 +230,8 @@ _COPILOT_TOOLS: list[types.Tool] = [
             types.FunctionDeclaration(
                 name="get_recent_posts",
                 description=(
-                    "Fetch recent published, failed, and queued/scheduled Instagram posts plus queue count. "
-                    "Call this when user asks about post status, whether media posted, permalinks, or queued items."
+                    "Fetch recent published, failed, and queued/scheduled Instagram posts PLUS all recently uploaded media files "
+                    "(with refs M1/M2, filename, .mp4/.jpg extension, and status). Call when user asks about posts or uploaded media."
                 ),
                 parameters=types.Schema(
                     type=types.Type.OBJECT,
@@ -251,7 +280,10 @@ _COPILOT_TOOLS: list[types.Tool] = [
                     properties={
                         "reply": types.Schema(
                             type=types.Type.STRING,
-                            description="Concise reply STRICTLY in the exact language of Latest User Message.",
+                            description=(
+                                "Balanced, proportional reply (exact facts asked, zero filler/fluff, not bloated or missing details) "
+                                "STRICTLY in the exact language of Latest User Message."
+                            ),
                         ),
                         "requested_action": types.Schema(
                             type=types.Type.STRING,
@@ -259,6 +291,11 @@ _COPILOT_TOOLS: list[types.Tool] = [
                         ),
                         "requested_scheduled_for_iso": types.Schema(type=types.Type.STRING),
                         "use_previous_draft": types.Schema(type=types.Type.BOOLEAN),
+                        "selected_media_refs": types.Schema(
+                            type=types.Type.ARRAY,
+                            items=types.Schema(type=types.Type.STRING),
+                            description="Refs like ['M1'] from available_media when selecting specific uploaded photo(s)/video(s).",
+                        ),
                         "proposed_caption": types.Schema(type=types.Type.STRING),
                         "proposed_hashtags": types.Schema(
                             type=types.Type.ARRAY,
@@ -520,26 +557,6 @@ class AICopilotService:
             for m in reversed(history_rows[1:5])
         ]
 
-        # Recover most recent attached media & draft from conversation history for multi-turn continuity
-        prior_media_urls: list[str] = []
-        prior_media_type = ""
-        prior_caption = ""
-        prior_hashtags: list[str] = []
-        for m in history_rows:
-            payload = m.structured_payload_json or {}
-            draft = payload.get("draft_post") or {}
-            if not prior_media_urls:
-                urls = draft.get("media_urls") or payload.get("media_urls") or []
-                if urls:
-                    prior_media_urls = list(urls)
-                    prior_media_type = str(draft.get("media_type") or payload.get("media_type") or "")
-            if not prior_caption and draft.get("caption"):
-                prior_caption = str(draft["caption"])
-            if not prior_hashtags and payload.get("hashtags"):
-                prior_hashtags = list(payload["hashtags"])
-            if prior_media_urls and prior_caption and prior_hashtags:
-                break
-
         try:
             tz = ZoneInfo(account.timezone)
         except (ZoneInfoNotFoundError, KeyError):
@@ -547,6 +564,49 @@ class AICopilotService:
         now_local = datetime.now(timezone.utc).astimezone(tz)
         current_local_str = now_local.strftime("%a, %b %d at %I:%M %p")
         current_local_iso = now_local.isoformat(timespec="seconds")
+
+        # Persist any current-turn attached URLs into MediaAsset if not already linked to this account
+        if attached_urls:
+            existing_assets = (
+                await db.execute(
+                    select(MediaAsset).where(MediaAsset.url.in_(attached_urls))
+                )
+            ).scalars().all()
+            by_url = {a.url: a for a in existing_assets}
+            for u in attached_urls:
+                inferred_type = media_type or (
+                    "CAROUSEL" if len(attached_urls) > 1 else "REELS"
+                )
+                ext, _ = _infer_media_ext_and_kind(u, "", inferred_type)
+                existing_row = by_url.get(u)
+                if existing_row is not None:
+                    if existing_row.account_id is None:
+                        existing_row.account_id = account.id
+                else:
+                    db.add(
+                        MediaAsset(
+                            account_id=account.id,
+                            url=u,
+                            media_type="REELS" if ext in (".mp4", ".mov", ".m4v", ".webm") else (media_type or "IMAGE"),
+                            file_ext=ext,
+                        )
+                    )
+            await db.flush()
+
+        # Recover draft continuity & full persistent multi-turn media registry (not clipped at 10 messages!)
+        media_ctx = await self.collect_available_media_assets(
+            db,
+            account=account,
+            tz=tz,
+            attached_urls=attached_urls,
+            attached_media_type=media_type,
+        )
+        available_media = media_ctx["available_media"]
+        ref_to_asset = {m["ref"]: m for m in available_media}
+        prior_media_urls = media_ctx["prior_media_urls"]
+        prior_media_type = media_ctx["prior_media_type"]
+        prior_caption = media_ctx["prior_caption"]
+        prior_hashtags = media_ctx["prior_hashtags"]
 
         slot_media_hint = media_type or prior_media_type or ("CAROUSEL" if len(attached_urls) > 1 else None)
 
@@ -614,6 +674,7 @@ class AICopilotService:
                 ensure_recent_posts=_ensure_recent_posts,
                 ensure_overview=_ensure_overview,
                 ensure_slots=_ensure_slots,
+                available_media=available_media,
             )
             turn_cache["tool_results"][tool_name] = result
             return result
@@ -633,23 +694,39 @@ class AICopilotService:
         static_system_instruction = (
             "You are SocialMediaAI's Instagram Growth & Scheduling Copilot. You CAN schedule and publish posts directly.\n"
             f"Account & Brand Profile (static): {json.dumps(static_profile)}\n\n"
-            "CRITICAL LANGUAGE & TONE RULES:\n"
+            "CRITICAL LANGUAGE & RESPONSE LENGTH RULES (GOLDILOCKS PRECISION):\n"
             "1. `reply` language MUST match ONLY the Latest User Message's language (English -> pure English with ZERO Hinglish; "
-            "German -> German; French -> French; Hindi -> Hindi; Hinglish -> Hinglish). NEVER switch to Hinglish or another language because of older chat turns.\n"
-            "2. Explain insights in plain everyday creator language — NEVER use developer/math jargon like 'Bayesian', 'UCB', 'MAD outlier', 'n_eff', or 'dynamic_niche_prior'.\n"
-            "3. `proposed_caption` MUST be in `caption_language` unless the user explicitly asks for another caption language.\n\n"
-            "TOOL & ACTION RULES:\n"
-            "- NEVER guess post statuses, metrics, or best slots — call `get_recent_posts`, `get_analytics_summary`, `get_best_time_slots`, or `get_account_audit_and_hashtags` first when data is needed.\n"
-            "- If the user asks to draft, schedule (`schedule`), publish right now (`publish_now`), plan a batch, or recommend slots, call `complete_response` with the exact fields.\n"
-            "- For `schedule`, convert clock times relative to `current_local_iso` (timezone preserved; if today's clock time already passed, use tomorrow at that time), or `'best'` if user asks for the best slot.\n"
-            "- Set `use_previous_draft=true` when referencing the prior draft/attached media.\n"
-            "- For Instagram Stories (`proposed_media_type='STORIES'`), adapt 100% creatively to any user style/vibe/poll/CTA requested and put overlay/CTA ideas in `proposed_caption`."
+            "German -> German; French -> French; Hindi -> Hindi; Hinglish -> Hinglish). NEVER switch language because of older chat turns.\n"
+            "2. RESPONSE SIZING: Give ONLY as much detail as the user asked for — neither bloated nor missing asked details:\n"
+            "   - Simple status / yes-no / timing / confirmation question: 1-2 direct sentences with exact status/time/link. ZERO greetings, ZERO unsolicited advice, ZERO 'let me know if you need anything else'.\n"
+            "   - Multi-item status / media inventory / analytics question: 2-4 crisp bullets or short lines with exact numbers/formats/file types.\n"
+            "   - Caption / Story / strategy / audit request: Complete ready-to-use output without padding.\n"
+            "3. Explain insights in plain everyday creator words — NEVER use developer/math jargon like 'Bayesian', 'UCB', 'MAD outlier', 'n_eff', or 'dynamic_niche_prior'.\n"
+            "4. `proposed_caption` MUST be in `caption_language` unless user asks for another caption language.\n\n"
+            "MEDIA MEMORY, TOOL & ACTION RULES:\n"
+            "- NEVER guess post statuses, metrics, or slots — call `get_recent_posts`, `get_analytics_summary`, `get_best_time_slots`, or `get_account_audit_and_hashtags` when data is needed.\n"
+            "- `available_media` lists uploaded photos/videos persistently across turns (`M1`, `M2`, ... with `.mp4`/`.jpg` & status). When user asks about previously sent files (e.g. '2 media', '.mp4 video'), check `available_media` or call `get_recent_posts`.\n"
+            "- ONLY set `requested_action='schedule'` or `'publish_now'` when user explicitly commands scheduling/posting. If user is asking about/clarifying uploaded media, set `requested_action='chat'`.\n"
+            "- When user selects/schedules specific uploaded file(s) (e.g. 'post the mp4 video'), set `selected_media_refs=['M1']` matching exact ref(s) from `available_media`.\n"
+            "- For `schedule`, convert clock times using `current_local_iso` timezone (if today's clock time passed, use tomorrow), or `'best'` if user asks for optimal time.\n"
+            "- For Instagram Stories (`proposed_media_type='STORIES'`), adapt 100% creatively to any requested style/vibe/poll/CTA and put overlay/CTA ideas in `proposed_caption`."
         )
 
-        # Level 1: Minimal dynamic turn payload (~250-450 tokens vs ~8k full dump)
+        # Level 1: Minimal dynamic turn payload (~300-500 tokens vs ~8k full dump)
         turn_payload: dict[str, Any] = {
             "recent_chat": recent_history,
         }
+        if available_media:
+            turn_payload["available_media"] = [
+                {
+                    "ref": m["ref"],
+                    "type": m["media_type"],
+                    "ext": m["ext"],
+                    "kind": m["kind"],
+                    "status": m["status"],
+                }
+                for m in available_media[:6]
+            ]
         if attached_urls:
             turn_payload["attached_media"] = {
                 "media_type": media_type or ("CAROUSEL" if len(attached_urls) > 1 else "REELS"),
@@ -660,7 +737,7 @@ class AICopilotService:
             turn_payload["previous_draft_in_chat"] = {
                 "has_media": bool(prior_media_urls),
                 "media_type": prior_media_type,
-                "caption_preview": prior_caption[:240],
+                "caption_preview": prior_caption[:220],
                 "hashtags": prior_hashtags[:8],
             }
         strict_lang_rule = _detect_message_language_rule(user_message)
@@ -690,6 +767,11 @@ class AICopilotService:
                 requested_action=str(finish_args.get("requested_action") or "chat"),
                 requested_scheduled_for_iso=str(finish_args.get("requested_scheduled_for_iso") or ""),
                 use_previous_draft=bool(finish_args.get("use_previous_draft", False)),
+                selected_media_refs=[
+                    str(r).strip().upper()
+                    for r in (finish_args.get("selected_media_refs") or [])
+                    if str(r).strip()
+                ],
                 proposed_caption=str(finish_args.get("proposed_caption") or ""),
                 proposed_hashtags=[str(t) for t in (finish_args.get("proposed_hashtags") or [])],
                 proposed_media_type=str(
@@ -709,6 +791,7 @@ class AICopilotService:
                 requested_action="chat",
                 requested_scheduled_for_iso="",
                 use_previous_draft=False,
+                selected_media_refs=[],
                 proposed_caption="",
                 proposed_hashtags=[],
                 proposed_media_type=media_type or prior_media_type or "REELS",
@@ -719,7 +802,8 @@ class AICopilotService:
             fallback_prompt = (
                 f"Turn Context JSON: {json.dumps(turn_payload)}\n"
                 f"Fetched Tool Data: {json.dumps(turn_cache['tool_results'])}\n"
-                f"Latest User Message: {user_message}"
+                f"Latest User Message: {user_message}\n"
+                f"Mandatory Reply Language Lock: {strict_lang_rule}"
             )
             action, fb_usage = await generate_structured_with_usage(
                 self.settings,
@@ -738,14 +822,38 @@ class AICopilotService:
 
         record_ai_usage(db, account_id=account.id, feature="copilot_chat", usage=chat_usage)
 
+        selected_assets = [
+            ref_to_asset[r.strip().upper()]
+            for r in action.selected_media_refs
+            if r.strip().upper() in ref_to_asset
+        ]
+        selected_urls = [a["url"] for a in selected_assets]
+        unscheduled_fallback = [
+            m["url"] for m in available_media if m["status"] == "chat_unscheduled"
+        ]
+
         structured_payload: dict[str, Any] = {}
-        effective_media_urls = attached_urls or (
-            prior_media_urls
-            if (action.use_previous_draft or action.requested_action in ("schedule", "publish_now"))
-            else []
+        effective_media_urls = (
+            attached_urls
+            or selected_urls
+            or (
+                prior_media_urls or unscheduled_fallback[:1]
+                if (action.use_previous_draft or action.requested_action in ("schedule", "publish_now"))
+                else []
+            )
+        )
+        selected_media_type_hint = (
+            "STORIES"
+            if action.proposed_media_type == "STORIES"
+            else (
+                "CAROUSEL"
+                if len(selected_assets) > 1
+                else (selected_assets[0]["media_type"] if len(selected_assets) == 1 else "")
+            )
         )
         effective_media_type = (
             media_type
+            or selected_media_type_hint
             or (prior_media_type if action.use_previous_draft and prior_media_type else "")
             or action.proposed_media_type
             or "REELS"
@@ -819,10 +927,20 @@ class AICopilotService:
         reply_text = action.reply
         if action.requested_action in ("schedule", "publish_now"):
             if not effective_media_urls:
-                reply_text = (
-                    "Note: No photo or Reel is attached yet — please attach or paste (Ctrl+V) "
-                    "your media first, and then tell me when to schedule or publish it."
-                )
+                if available_media:
+                    summary = ", ".join(
+                        f"{m['ref']} ({m['media_type']} {m['ext']}, {m['status']})"
+                        for m in available_media[:4]
+                    )
+                    reply_text = (
+                        f"Please specify which media to schedule/publish ({summary}), "
+                        "or attach a new photo/video."
+                    )
+                else:
+                    reply_text = (
+                        "No photo or Reel is attached yet — please attach or paste (Ctrl+V) "
+                        "your media first, then tell me when to schedule or publish it."
+                    )
             else:
                 target_dt = datetime.now(timezone.utc)
                 rationale_text = "Scheduled via AI Copilot chat."
@@ -921,6 +1039,148 @@ class AICopilotService:
             "created_at": assistant_msg.created_at.isoformat(),
         }
 
+    async def collect_available_media_assets(
+        self,
+        db: AsyncSession,
+        *,
+        account: InstagramAccount,
+        tz: ZoneInfo,
+        attached_urls: list[str],
+        attached_media_type: str = "",
+    ) -> dict[str, Any]:
+        """Build deduplicated multi-source media memory (MediaAsset + up to 60 media-bearing msgs + ScheduledPosts)."""
+        asset_rows = (
+            await db.execute(
+                select(MediaAsset)
+                .where(MediaAsset.account_id == account.id)
+                .order_by(MediaAsset.created_at.desc())
+                .limit(25)
+            )
+        ).scalars().all()
+        msg_rows = (
+            await db.execute(
+                select(CopilotMessage)
+                .where(
+                    CopilotMessage.account_id == account.id,
+                    CopilotMessage.structured_payload_json.isnot(None),
+                )
+                .order_by(CopilotMessage.created_at.desc())
+                .limit(60)
+            )
+        ).scalars().all()
+        post_rows = (
+            await db.execute(
+                select(ScheduledPost)
+                .where(ScheduledPost.account_id == account.id)
+                .order_by(ScheduledPost.updated_at.desc())
+                .limit(15)
+            )
+        ).scalars().all()
+
+        url_to_post_status: dict[str, dict[str, Any]] = {}
+        for p in post_rows:
+            sched_utc = (
+                p.scheduled_for.replace(tzinfo=timezone.utc)
+                if p.scheduled_for.tzinfo is None
+                else p.scheduled_for
+            )
+            sched_disp = sched_utc.astimezone(tz).strftime("%a, %b %d at %I:%M %p")
+            for u in p.media_urls_json or []:
+                if u not in url_to_post_status:
+                    url_to_post_status[u] = {
+                        "status": p.status,
+                        "scheduled_for_local": sched_disp,
+                        "published_permalink": p.published_permalink,
+                        "media_type": p.media_type,
+                    }
+
+        ordered_entries: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
+
+        def _add_entry(
+            url: str,
+            m_type: str = "",
+            filename: str = "",
+            status_override: str = "",
+            created_at: datetime | None = None,
+        ) -> None:
+            clean_url = (url or "").strip()
+            if not clean_url or clean_url in seen_urls:
+                return
+            seen_urls.add(clean_url)
+            post_meta = url_to_post_status.get(clean_url)
+            eff_type = m_type or (post_meta["media_type"] if post_meta else "")
+            ext, kind = _infer_media_ext_and_kind(clean_url, filename, eff_type)
+            if not eff_type:
+                eff_type = "REELS" if kind == "video" else "IMAGE"
+            status_val = status_override or (
+                post_meta["status"] if post_meta else "chat_unscheduled"
+            )
+            disp_time = None
+            if created_at is not None:
+                c_utc = (
+                    created_at.replace(tzinfo=timezone.utc)
+                    if created_at.tzinfo is None
+                    else created_at
+                )
+                disp_time = c_utc.astimezone(tz).strftime("%a, %b %d at %I:%M %p")
+            ordered_entries.append(
+                {
+                    "ref": f"M{len(ordered_entries) + 1}",
+                    "url": clean_url,
+                    "media_type": eff_type,
+                    "ext": ext,
+                    "kind": kind,
+                    "filename": filename,
+                    "status": status_val,
+                    "uploaded_at_local": disp_time,
+                    "scheduled_for_local": post_meta["scheduled_for_local"] if post_meta else None,
+                    "published_permalink": post_meta["published_permalink"] if post_meta else "",
+                }
+            )
+
+        for u in attached_urls:
+            _add_entry(u, m_type=attached_media_type, status_override="just_attached")
+
+        for a in asset_rows:
+            _add_entry(
+                a.url,
+                m_type=a.media_type,
+                filename=a.filename,
+                created_at=a.created_at,
+            )
+
+        prior_media_urls: list[str] = []
+        prior_media_type = ""
+        prior_caption = ""
+        prior_hashtags: list[str] = []
+        for m in msg_rows:
+            payload = m.structured_payload_json or {}
+            draft = payload.get("draft_post") or {}
+            msg_urls = draft.get("media_urls") or payload.get("media_urls") or []
+            msg_type = str(draft.get("media_type") or payload.get("media_type") or "")
+            if msg_urls and not prior_media_urls:
+                prior_media_urls = list(msg_urls)
+                prior_media_type = msg_type
+            for u in msg_urls:
+                _add_entry(u, m_type=msg_type, created_at=m.created_at)
+            if not prior_caption and draft.get("caption"):
+                prior_caption = str(draft["caption"])
+            if not prior_hashtags and payload.get("hashtags"):
+                prior_hashtags = list(payload["hashtags"])
+
+        for p in post_rows:
+            for u in p.media_urls_json or []:
+                _add_entry(u, m_type=p.media_type, created_at=p.created_at)
+
+        return {
+            "available_media": ordered_entries[:8],
+            "prior_media_urls": prior_media_urls,
+            "prior_media_type": prior_media_type,
+            "prior_caption": prior_caption,
+            "prior_hashtags": prior_hashtags,
+        }
+
     async def execute_copilot_tool(
         self,
         *,
@@ -932,6 +1192,7 @@ class AICopilotService:
         ensure_recent_posts: Any,
         ensure_overview: Any,
         ensure_slots: Any,
+        available_media: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Dispatch Level 3 on-demand Copilot data tools cleanly without loading unused context."""
         if tool_name == "get_recent_posts":
@@ -965,8 +1226,22 @@ class AICopilotService:
                         "caption_preview": p.caption[:100],
                     }
                 )
+            uploaded_media = [
+                {
+                    "ref": m["ref"],
+                    "media_type": m["media_type"],
+                    "ext": m["ext"],
+                    "kind": m["kind"],
+                    "filename": m.get("filename") or "",
+                    "status": m["status"],
+                    "scheduled_for_local": m.get("scheduled_for_local"),
+                    "published_permalink": m.get("published_permalink") or "",
+                }
+                for m in (available_media or [])
+            ]
             return {
                 "posts": formatted,
+                "uploaded_media": uploaded_media,
                 "existing_queue": summarize_existing_queue(queued, account.timezone),
             }
 
